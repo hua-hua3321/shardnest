@@ -5,3 +5,6 @@ dist/
 .env.*
 !.env.example
 .DS_Store
+
+# 测试隔离目录
+.test-shardnest-*/
