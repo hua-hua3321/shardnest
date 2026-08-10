@@ -112,7 +112,17 @@ export function verifySignedRequest(
   if (r.v !== 1 || typeof r.action !== 'string' || typeof r.nonce !== 'string' || r.nonce.length < 16) {
     return { ok: false, error: 'INVALID_FORMAT' }
   }
-  if (typeof r.expires_at !== 'number' || r.expires_at * 1000 <= nowMs) {
+  // 字段格式校验（防垃圾字段进入 canonical 签名路径）
+  if (typeof r.intent_hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(r.intent_hash)) {
+    return { ok: false, error: 'INVALID_FORMAT' }
+  }
+  if (typeof r.display !== 'string' || r.display.length === 0 || r.display.length > 200) {
+    return { ok: false, error: 'INVALID_FORMAT' }
+  }
+  if (typeof r.wallet_address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(r.wallet_address)) {
+    return { ok: false, error: 'INVALID_FORMAT' }
+  }
+  if (typeof r.expires_at !== 'number' || !Number.isInteger(r.expires_at) || r.expires_at * 1000 <= nowMs) {
     return { ok: false, error: 'EXPIRED' }
   }
   const sig = Uint8Array.from(Buffer.from(r.platform_signature, 'hex'))

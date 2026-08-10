@@ -88,6 +88,16 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(() => decodeRecoveryCode('bad-format')).toThrow()
   })
 
+  it('恢复码 index 越界（999）→ 解码抛错（P1-B：GF 域 x 坐标校验）', () => {
+    const share = { index: 2, bytes: new Uint8Array([1, 2, 3]) }
+    const code = encodeRecoveryCode(share)
+    const [, , hex, crc] = code.split('-')
+    // 用合法 CRC 但越界 index——CRC 覆盖 index，必然失败
+    expect(() => decodeRecoveryCode(`sn1-999-${hex}-${crc}`)).toThrow()
+    // 直接构造：index 合法但 CRC 覆盖 index，篡改 index 后 CRC 不匹配
+    expect(() => decodeRecoveryCode(`sn1-999-${hex}-00`)).toThrow()
+  })
+
   it('恢复码 CRC 被篡改 → 解码抛错（防手输/OCR 错误静默恢复错误钱包）', () => {
     const share = { index: 7, bytes: new Uint8Array([1, 2, 3, 255]) }
     const code = encodeRecoveryCode(share)

@@ -27,7 +27,7 @@ export function createShardnestServer(
 
   server.tool(
     'wallet_create',
-    { passphrase: z.string().min(8), email: z.string().email().optional() },
+    { passphrase: z.string().min(12), email: z.string().email().optional() },
     async ({ passphrase, email }) => {
       const result = await initWallet(passphrase, email)
       return {
@@ -35,10 +35,11 @@ export function createShardnestServer(
           type: 'text' as const,
           text: JSON.stringify({
             address: result.address,
-            recovery_codes: result.recoveryCodes,
+            // ⚠️ 恢复码不经 LLM：只返回本地文件路径（0600），用户自行查看保存
+            recovery_codes_file: result.recoveryFile ?? null,
             backup_email: result.backupEmail ?? null,
             backup_status: result.backupStatus ?? null,
-            warning: '请立即保存恢复码；丢失后设备损坏将无法找回',
+            warning: '恢复码已写入本地文件，请立即查看并妥善保存；如提供邮箱，备份分片已发送',
           }),
         }],
       }

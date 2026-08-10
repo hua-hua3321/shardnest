@@ -57,6 +57,30 @@ describe('signed_request v1', () => {
     expect(verifySignedRequest('junk', platformAddr).error).toBe('INVALID_FORMAT')
   })
 
+  it('intent_hash 非 0x64hex → INVALID_FORMAT（字段格式校验）', () => {
+    const req = issueSignedRequest(makeOptions(), platformPriv)
+    const bad = { ...req, intent_hash: 'not-a-hash' }
+    expect(verifySignedRequest(bad, platformAddr).error).toBe('INVALID_FORMAT')
+  })
+
+  it('wallet_address 非 0x40hex → INVALID_FORMAT', () => {
+    const req = issueSignedRequest(makeOptions(), platformPriv)
+    const bad = { ...req, wallet_address: 'junk' }
+    expect(verifySignedRequest(bad, platformAddr).error).toBe('INVALID_FORMAT')
+  })
+
+  it('display 超长 → INVALID_FORMAT', () => {
+    const req = issueSignedRequest(makeOptions(), platformPriv)
+    const bad = { ...req, display: 'x'.repeat(201) }
+    expect(verifySignedRequest(bad, platformAddr).error).toBe('INVALID_FORMAT')
+  })
+
+  it('expires_at 非整数 → EXPIRED/INVALID（防浮点时间）', () => {
+    const req = issueSignedRequest(makeOptions(), platformPriv)
+    const bad = { ...req, expires_at: 1234.56 }
+    expect(verifySignedRequest(bad, platformAddr).error).toBeTruthy()
+  })
+
   it('canonicalString 确定性', () => {
     const a = makeOptions()
     const base = { v: 1 as const, action: a.action, intent_hash: a.intentHash, display: a.display, user_id: a.userId, wallet_address: a.walletAddress, nonce: a.nonce, expires_at: a.expiresAt }

@@ -30,6 +30,20 @@ export function getHomeDir(): string {
 }
 const metaFile = () => path.join(getHomeDir(), 'metadata.json')
 const deviceFile = () => path.join(getHomeDir(), 'device-share.json')
+const recoveryFile = () => path.join(getHomeDir(), 'recovery-codes.txt')
+
+/** 恢复码落盘（0600 明文，用户自持责任；与纸备份等价，供 MCP 场景免 LLM 交付） */
+export async function saveRecoveryCodes(codes: string[]): Promise<string> {
+  const file = recoveryFile()
+  const content = [
+    '# shardnest 恢复码（请妥善保管，勿转发/上传）',
+    '# 任意 2 个可恢复钱包；单凭 1 个无法动用资金',
+    '',
+    ...codes.map((c) => c + ''),
+  ].join('\n') + '\n'
+  await fs.writeFile(file, content, { mode: 0o600 })
+  return file
+}
 
 export interface InitResult {
   address: string
@@ -37,14 +51,21 @@ export interface InitResult {
   /** 邮箱备份分片状态（提供邮箱时）：sent=已发送 / skipped=未配置 SMTP */
   backupEmail?: string
   backupStatus?: 'sent' | 'skipped'
+  /** 恢复码本地文件路径（MCP 场景经此交付，不经 LLM） */
+  recoveryFile?: string
+  /** 附加提示（如 restore 后需更新邮箱备份） */
+  note?: string
 }
 
 import { keccak_256 } from '@noble/hashes/sha3'
 
-/** 恢复码编码：sn1-<index>-<hex>-<crc>（crc = keccak(hex) 首字节，防手输/OCR 错误） */
+/** 恢复码编码：sn1-<index>-<hex>-<crc>
+ * crc = keccak(`${index}:${hex}`) 首字节——CRC 覆盖 index+hex，
+ * 防手输/OCR 错误的同时杜绝「错误 index + 正确 hex」绕过（P1-B）
+ */
 export function encodeRecoveryCode(share: Share): string {
   const hex = Buffer.from(share.bytes).toString('hex')
-  const crc = keccak_256(new TextEncoder().encode(hex))[0].toString(16).padStart(2, '0')
+  const crc = keccak_256(new TextEncoder().encode(`${share.index}:${hex}`))[0].toString(16).padStart(2, '0')
   return `sn1-${share.index}-${hex}-${crc}`
 }
 
@@ -52,9 +73,13 @@ export function decodeRecoveryCode(code: string): Share {
   const parts = code.trim().split('-')
   if (parts.length !== 4 || parts[0] !== 'sn1') throw new Error('无效恢复码格式')
   const [, idx, hex, crc] = parts
-  const expectCrc = keccak_256(new TextEncoder().encode(hex))[0].toString(16).padStart(2, '0')
+  const index = Number(idx)
+  // index 必须为 [1,255] 整数（GF(256) x 坐标域）
+  if (!Number.isInteger(index) || index < 1 || index > 255) throw new Error('恢复码 index 超出有效范围')
+  if (!/^[0-9a-f]{2,128}$/.test(hex) || hex.length % 2 !== 0) throw new Error('恢复码 hex 格式无效')
+  const expectCrc = keccak_256(new TextEncoder().encode(`${index}:${hex}`))[0].toString(16).padStart(2, '0')
   if (crc !== expectCrc) throw new Error('恢复码校验失败（可能抄错/损坏），请核对后重试')
-  return { index: Number(idx), bytes: new Uint8Array(Buffer.from(hex, 'hex')) }
+  return { index, bytes: new Uint8Array(Buffer.from(hex, 'hex')) }
 }
 
 async function encryptShare(share: Share, passphrase: string): Promise<{ data: string; salt: string }> {
@@ -116,7 +141,9 @@ export async function initWallet(passphrase: string, email?: string): Promise<In
   await fs.writeFile(deviceFile(), JSON.stringify({ version: 1, share: enc }, null, 2), { mode: 0o600 })
   privateKey.fill(0)
 
-  return { address, recoveryCodes, backupEmail: email, backupStatus }
+  // 恢复码落盘（0600，用户自持；MCP 场景经此交付不经 LLM）
+  const recoveryFileWritten = await saveRecoveryCodes(recoveryCodes)
+  return { address, recoveryCodes, backupEmail: email, backupStatus, recoveryFile: recoveryFileWritten }
 }
 
 /** 显示地址（无需口令） */
@@ -130,13 +157,18 @@ export async function signMessage(passphrase: string, recoveryCode: string, mess
   const enc = JSON.parse(await fs.readFile(deviceFile(), 'utf8')) as { share: { data: string; salt: string } }
   const share1 = await decryptShare(enc.share, passphrase)
   const share2 = decodeRecoveryCode(recoveryCode)
-  const { WalletVault } = await import('@wallet-service/signer')
-  const vault = new WalletVault()
-  vault.unlock([share1, share2])
-  const sig = vault.signMessage(new TextEncoder().encode(message))
-  const addr = vault.getAddress()
-  vault.wipe()
-  return JSON.stringify({ address: addr, signature: Buffer.from(sig).toString('hex') })
+  try {
+    const { WalletVault } = await import('@wallet-service/signer')
+    const vault = new WalletVault()
+    vault.unlock([share1, share2])
+    const sig = vault.signMessage(new TextEncoder().encode(message))
+    const addr = vault.getAddress()
+    vault.wipe()
+    return JSON.stringify({ address: addr, signature: Buffer.from(sig).toString('hex') })
+  } finally {
+    share1.bytes.fill(0)
+    share2.bytes.fill(0)
+  }
 }
 
 /** 恢复：输入任意 2 个恢复码 → 重组 → 新设备片（口令加密）+ 新恢复码（reshare）
@@ -172,7 +204,14 @@ export async function restoreWallet(
     throw err
   }
 
-  return { address, recoveryCodes: [fresh[1], fresh[2]].map(encodeRecoveryCode) }
+  const newCodes = [fresh[1], fresh[2]].map(encodeRecoveryCode)
+  const recoveryFileWritten = await saveRecoveryCodes(newCodes)
+  return {
+    address,
+    recoveryCodes: newCodes,
+    recoveryFile: recoveryFileWritten,
+    note: '如曾使用邮箱备份，请重新运行 init 邮箱流程更新邮箱中的备份分片（旧邮件中的分片仍有效，建议删除）',
+  }
 }
 
 /** 创建解锁令牌：本地口令+恢复码 → 组合私钥 → 短期单次解锁会话（P0-1） */
@@ -180,10 +219,15 @@ export async function createUnlockToken(passphrase: string, recoveryCode: string
   const enc = JSON.parse(await fs.readFile(deviceFile(), 'utf8')) as { share: { data: string; salt: string } }
   const share1 = await decryptShare(enc.share, passphrase)
   const share2 = decodeRecoveryCode(recoveryCode)
-  const privateKey = combineShares([share1, share2])
-  const token = await createUnlockSession(privateKey)
-  privateKey.fill(0)
-  return token
+  try {
+    const privateKey = combineShares([share1, share2])
+    const token = await createUnlockSession(privateKey)
+    privateKey.fill(0)
+    return token
+  } finally {
+    share1.bytes.fill(0)
+    share2.bytes.fill(0)
+  }
 }
 
 /** 读取旧 metadata 中的地址（不存在返回 undefined） */

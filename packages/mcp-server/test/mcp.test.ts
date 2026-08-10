@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
+import { getHomeDir } from '@wallet-service/cli'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { createShardnestServer } from '../src/index'
@@ -19,6 +20,15 @@ beforeEach(async () => {
 const platformPriv = generatePrivateKey()
 const platformAddr = privateKeyToAddress(platformPriv)
 const PASSPHRASE = 'mcp-passphrase-123!'
+
+/** 创建钱包并返回（地址 + 从本地文件读取的恢复码） */
+async function createWallet(client: Client, passphrase: string, email?: string) {
+  const res = await client.callTool({ name: 'wallet_create', arguments: { passphrase, email } })
+  const data = JSON.parse((res.content[0] as { text: string }).text)
+  const fileContent = await fs.readFile(path.join(getHomeDir(), 'recovery-codes.txt'), 'utf8')
+  const recoveryCodes = fileContent.split('\n').filter((l) => l.startsWith('sn1-'))
+  return { address: data.address, recoveryCodes, data }
+}
 
 async function connect(approval?: (req: { action: string; display: string }) => boolean) {
   const server = createShardnestServer(
@@ -41,28 +51,34 @@ describe('shardnest MCP 薄壳', () => {
 
   it('wallet_create → 返回地址 + 恢复码', async () => {
     const client = await connect()
-    const res = await client.callTool({ name: 'wallet_create', arguments: { passphrase: PASSPHRASE } })
-    const text = res.content[0] as { type: string; text: string }
-    const data = JSON.parse(text.text)
-    expect(data.address).toMatch(/^0x[0-9a-fA-F]{40}$/)
-    expect(data.recovery_codes.length).toBe(2)
+    const created = await createWallet(client, PASSPHRASE)
+    expect(created.address).toMatch(/^0x[0-9a-fA-F]{40}$/)
+    expect(created.recoveryCodes.length).toBe(2)
   })
 
-  it('wallet_create 带 email → 返回 backup 状态（未配置 SMTP = skipped）', async () => {
+  it('wallet_create 带 email → 返回 backup 状态 + 恢复码文件路径（不经 LLM）', async () => {
     const client = await connect()
-    const res = await client.callTool({
-      name: 'wallet_create',
-      arguments: { passphrase: PASSPHRASE, email: 'user@example.com' },
-    })
-    const data = JSON.parse((res.content[0] as { text: string }).text)
-    expect(data.backup_email).toBe('user@example.com')
-    expect(data.backup_status).toBe('skipped')
+    const created = await createWallet(client, PASSPHRASE, 'user@example.com')
+    expect(created.data.backup_email).toBe('user@example.com')
+    expect(created.data.backup_status).toBe('skipped')
+    // 恢复码不经 LLM：响应只含文件路径
+    expect(created.data.recovery_codes_file).toBeTruthy()
+    expect(created.data.recovery_codes).toBeUndefined()
+    expect(created.recoveryCodes.length).toBe(2)
+  })
+
+  it('wallet_create 口令 <12 位 → 拒绝（与 CLI 强度一致）', async () => {
+    const client = await connect()
+    const res = await client.callTool({ name: 'wallet_create', arguments: { passphrase: 'short8' } })
+    const text = res.content[0] as { type: string; text: string }
+    // zod 校验失败由 MCP 层返回错误（isError 或错误文本）
+    expect(text.text.includes('short8') || text.text.includes('Invalid') || text.text.includes('too_small')).toBe(true)
   })
 
   it('signed_request_sign：平台背书 → 确认 → 返回可验签签名', async () => {
     const client = await connect()
-    // 1. 创建钱包（拿地址 + 恢复码）
-    const created = JSON.parse(((await client.callTool({ name: 'wallet_create', arguments: { passphrase: PASSPHRASE } })).content[0] as { text: string }).text)
+    // 1. 创建钱包（地址 + 本地恢复码文件，不经 LLM）
+    const created = await createWallet(client, PASSPHRASE)
     // 2. 平台签发背书请求（钱包地址绑定）
     const req = issueSignedRequest({
       action: 'bind_wallet',
@@ -74,7 +90,7 @@ describe('shardnest MCP 薄壳', () => {
       expiresAt: Math.floor(Date.now() / 1000) + 300,
     }, platformPriv)
     // 3. 本地解锁（口令+恢复码在本地生成令牌，不经 LLM）
-    const token = await createUnlockToken(PASSPHRASE, created.recovery_codes[0])
+    const token = await createUnlockToken(PASSPHRASE, created.recoveryCodes[0])
     // 4. 签名（验背书 → 地址校验 → 确认 → 令牌消费 → 本地签名）
     const signRes = await client.callTool({
       name: 'signed_request_sign',
@@ -90,8 +106,8 @@ describe('shardnest MCP 薄壳', () => {
 
   it('wallet_address 与本地不一致 → WALLET_ADDRESS_MISMATCH 拒绝（纵深防御）', async () => {
     const client = await connect()
-    const created = JSON.parse(((await client.callTool({ name: 'wallet_create', arguments: { passphrase: PASSPHRASE } })).content[0] as { text: string }).text)
-    const token = await createUnlockToken(PASSPHRASE, created.recovery_codes[0])
+    const created = await createWallet(client, PASSPHRASE)
+    const token = await createUnlockToken(PASSPHRASE, created.recoveryCodes[0])
     const req = issueSignedRequest({
       action: 'bind_wallet',
       intentHash: '0x' + 'ab'.repeat(32),
@@ -111,7 +127,7 @@ describe('shardnest MCP 薄壳', () => {
 
   it('无效解锁令牌 → UNLOCK_INVALID（单次使用 + 过期防护）', async () => {
     const client = await connect()
-    const created = JSON.parse(((await client.callTool({ name: 'wallet_create', arguments: { passphrase: PASSPHRASE } })).content[0] as { text: string }).text)
+    const created = await createWallet(client, PASSPHRASE)
     const req = issueSignedRequest({
       action: 'bind_wallet',
       intentHash: '0x' + 'cd'.repeat(32),
@@ -132,7 +148,7 @@ describe('shardnest MCP 薄壳', () => {
   it('伪造背书（非平台签发）→ BAD_SIGNATURE 拒绝', async () => {
     const client = await connect()
     const fake = generatePrivateKey()
-    const created = JSON.parse(((await client.callTool({ name: 'wallet_create', arguments: { passphrase: PASSPHRASE } })).content[0] as { text: string }).text)
+    const created = await createWallet(client, PASSPHRASE)
     const req = issueSignedRequest({
       action: 'bind_wallet',
       intentHash: '0x' + 'ef'.repeat(32),
@@ -142,7 +158,7 @@ describe('shardnest MCP 薄壳', () => {
       nonce: 'nonce-mcp-00000002',
       expiresAt: Math.floor(Date.now() / 1000) + 300,
     }, fake)
-    const token = await createUnlockToken(PASSPHRASE, created.recovery_codes[0])
+    const token = await createUnlockToken(PASSPHRASE, created.recoveryCodes[0])
     const res = await client.callTool({
       name: 'signed_request_sign',
       arguments: { signed_request: req, unlock_token: token },
@@ -153,7 +169,7 @@ describe('shardnest MCP 薄壳', () => {
 
   it('用户拒绝确认 → USER_REJECTED', async () => {
     const client = await connect(() => false)
-    const created = JSON.parse(((await client.callTool({ name: 'wallet_create', arguments: { passphrase: PASSPHRASE } })).content[0] as { text: string }).text)
+    const created = await createWallet(client, PASSPHRASE)
     const req = issueSignedRequest({
       action: 'withdraw_confirm',
       intentHash: '0x' + '12'.repeat(32),
@@ -163,7 +179,7 @@ describe('shardnest MCP 薄壳', () => {
       nonce: 'nonce-mcp-00000003',
       expiresAt: Math.floor(Date.now() / 1000) + 300,
     }, platformPriv)
-    const token = await createUnlockToken(PASSPHRASE, created.recovery_codes[0])
+    const token = await createUnlockToken(PASSPHRASE, created.recoveryCodes[0])
     const res = await client.callTool({
       name: 'signed_request_sign',
       arguments: { signed_request: req, unlock_token: token },

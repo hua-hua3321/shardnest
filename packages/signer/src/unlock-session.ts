@@ -36,7 +36,7 @@ export async function createUnlockSession(privateKey: Uint8Array): Promise<strin
   const ct = cipher.encrypt(privateKey)
   const dir = getUnlockDir()
   await fs.mkdir(dir, { recursive: true })
-  const file = path.join(dir, `unlock-${token.slice(0, 8)}.bin`)
+  const file = path.join(dir, `unlock-${token.slice(0, 16)}.bin`)
   await fs.writeFile(
     file,
     JSON.stringify({ v: 1, nonce: Buffer.from(nonce).toString('base64'), ct: Buffer.from(ct).toString('base64') }),
@@ -52,22 +52,26 @@ export async function createUnlockSession(privateKey: Uint8Array): Promise<strin
 export async function consumeUnlockSession(token: string): Promise<Uint8Array> {
   if (!/^[0-9a-f]{64}$/.test(token)) throw new Error('解锁令牌格式无效')
   const dir = getUnlockDir()
-  const file = path.join(dir, `unlock-${token.slice(0, 8)}.bin`)
-  let stat: Awaited<ReturnType<typeof fs.stat>>
+  const file = path.join(dir, `unlock-${token.slice(0, 16)}.bin`)
+  // 原子消费（TOCTOU 防护）：先 rename 到消费中文件（原子操作），
+  // 并发第二个消费方 rename 失败 → 单次语义严格成立
+  const consuming = path.join(dir, `consuming-${token.slice(0, 16)}.bin`)
   try {
-    stat = await fs.stat(file)
+    await fs.rename(file, consuming)
   } catch {
     throw new Error('解锁会话不存在或已被使用')
   }
-  if (Date.now() - stat.mtimeMs > UNLOCK_TTL_MS) {
-    await fs.rm(file, { force: true })
-    throw new Error('解锁会话已过期，请重新 unlock')
+  try {
+    const stat = await fs.stat(consuming)
+    if (Date.now() - stat.mtimeMs > UNLOCK_TTL_MS) {
+      throw new Error('解锁会话已过期，请重新 unlock')
+    }
+    const data = JSON.parse(await fs.readFile(consuming, 'utf8')) as { nonce: string; ct: string }
+    const kek = sha256(new TextEncoder().encode(token))
+    const nonce = Uint8Array.from(Buffer.from(data.nonce, 'base64'))
+    const ct = Uint8Array.from(Buffer.from(data.ct, 'base64'))
+    return gcm(kek, nonce).decrypt(ct)
+  } finally {
+    await fs.rm(consuming, { force: true })
   }
-  const data = JSON.parse(await fs.readFile(file, 'utf8')) as { nonce: string; ct: string }
-  const kek = sha256(new TextEncoder().encode(token))
-  const nonce = Uint8Array.from(Buffer.from(data.nonce, 'base64'))
-  const ct = Uint8Array.from(Buffer.from(data.ct, 'base64'))
-  const privKey = gcm(kek, nonce).decrypt(ct)
-  await fs.rm(file, { force: true }) // 单次使用
-  return privKey
 }
