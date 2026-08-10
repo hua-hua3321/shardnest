@@ -1,0 +1,65 @@
+import { describe, it, expect } from 'bun:test'
+import { issueSignedRequest, verifySignedRequest, canonicalString } from '../src/signed-request'
+import { generatePrivateKey, privateKeyToAddress } from '@wallet-service/core'
+
+/** 平台密钥对 */
+const platformPriv = generatePrivateKey()
+const platformAddr = privateKeyToAddress(platformPriv)
+
+/** 期望平台地址（另一把钥匙，用于验签失败场景） */
+const otherPriv = generatePrivateKey()
+const otherAddr = privateKeyToAddress(otherPriv)
+
+function makeOptions(overrides: Partial<Parameters<typeof issueSignedRequest>[0]> = {}) {
+  return {
+    action: 'bind_wallet' as const,
+    intentHash: '0x' + 'ab'.repeat(32),
+    display: '绑定钱包到 envoytask 平台',
+    userId: 'envoytask-user-42',
+    walletAddress: '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf',
+    nonce: 'nonce-1234567890abcdef',
+    expiresAt: Math.floor(Date.now() / 1000) + 300,
+    ...overrides,
+  }
+}
+
+describe('signed_request v1', () => {
+  it('平台签发 → 钱包验签通过（闭环）', () => {
+    const req = issueSignedRequest(makeOptions(), platformPriv)
+    const result = verifySignedRequest(req, platformAddr)
+    expect(result.ok).toBe(true)
+    expect(result.platformAddress?.toLowerCase()).toBe(platformAddr.toLowerCase())
+  })
+
+  it('过期请求 → EXPIRED', () => {
+    const req = issueSignedRequest(makeOptions({ expiresAt: Math.floor(Date.now() / 1000) - 10 }), platformPriv)
+    expect(verifySignedRequest(req, platformAddr).error).toBe('EXPIRED')
+  })
+
+  it('nonce 过短 → INVALID_FORMAT', () => {
+    const req = issueSignedRequest(makeOptions({ nonce: 'short' }), platformPriv)
+    expect(verifySignedRequest(req, platformAddr).error).toBe('INVALID_FORMAT')
+  })
+
+  it('签名被篡改 → BAD_SIGNATURE', () => {
+    const req = issueSignedRequest(makeOptions(), platformPriv)
+    const tampered = { ...req, display: '向攻击者地址提现 100 USDC' }
+    expect(verifySignedRequest(tampered, platformAddr).error).toBe('BAD_SIGNATURE')
+  })
+
+  it('期望平台地址不匹配 → BAD_SIGNATURE（防伪造平台背书）', () => {
+    const req = issueSignedRequest(makeOptions(), platformPriv)
+    expect(verifySignedRequest(req, otherAddr).error).toBe('BAD_SIGNATURE')
+  })
+
+  it('非对象输入 → INVALID_FORMAT', () => {
+    expect(verifySignedRequest(null, platformAddr).error).toBe('INVALID_FORMAT')
+    expect(verifySignedRequest('junk', platformAddr).error).toBe('INVALID_FORMAT')
+  })
+
+  it('canonicalString 确定性', () => {
+    const a = makeOptions()
+    const base = { v: 1 as const, action: a.action, intent_hash: a.intentHash, display: a.display, user_id: a.userId, wallet_address: a.walletAddress, nonce: a.nonce, expires_at: a.expiresAt }
+    expect(canonicalString(base)).toBe(canonicalString(base))
+  })
+})

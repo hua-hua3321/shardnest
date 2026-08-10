@@ -1,0 +1,13 @@
+/**
+ * CLI 库 API（供 MCP 薄壳等程序化调用；CLI 入口在 index.ts）
+ */
+export {
+  getHomeDir,
+  initWallet,
+  getAddress,
+  signMessage,
+  restoreWallet,
+  encodeRecoveryCode,
+  decodeRecoveryCode,
+  type InitResult,
+} from './commands'
