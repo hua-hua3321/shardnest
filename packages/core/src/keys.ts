@@ -5,11 +5,15 @@
  * 仅作为加密分片的钥匙（KEK）。这保证口令重置后私钥不变、地址不变。
  */
 import { secp256k1 } from '@noble/curves/secp256k1'
-import { sha256 } from '@noble/hashes/sha256'
+import { keccak_256 } from '@noble/hashes/sha3'
+import { scryptAsync } from '@noble/hashes/scrypt'
 import { bytesToHex } from '@noble/hashes/utils'
 
 /** secp256k1 曲线阶 n（私钥必须 < n） */
 const CURVE_ORDER = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141')
+
+/** KEK 派生参数（scrypt 高成本防暴力破解；2^16=64MB 内存，兼顾 Web 端） */
+const SCRYPT_OPTS = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 }
 
 export interface KeyPair {
   privateKey: Uint8Array
@@ -37,14 +41,28 @@ export function privateKeyToPublicKey(privateKey: Uint8Array): Uint8Array {
 }
 
 /**
- * 私钥 → EVM 地址（0x + 公钥 keccak256 后 20 字节）
+ * EIP-55 checksum 地址（大小写校验和，防复制错误）
+ */
+export function toChecksumAddress(address: string): `0x${string}` {
+  const lower = address.toLowerCase().replace(/^0x/, '')
+  const hash = keccak_256(new TextEncoder().encode(lower))
+  let result = '0x'
+  for (let i = 0; i < lower.length; i++) {
+    const byte = hash[i >> 1]
+    const nibble = i % 2 === 0 ? byte >> 4 : byte & 0x0f
+    result += nibble >= 8 ? lower[i].toUpperCase() : lower[i]
+  }
+  return result as `0x${string}`
+}
+
+/**
+ * 私钥 → EVM 地址（EIP-55 checksum 格式）
+ * 标准推导：address = keccak256(pubkey_uncompressed[1:])[12:]
  */
 export function privateKeyToAddress(privateKey: Uint8Array): `0x${string}` {
   const pub = secp256k1.getPublicKey(privateKey, false) // 65 字节非压缩
-  const hash = sha256(pub.slice(1)) // keccak256 语义由 noble 提供
-  // 注：EVM 地址 = keccak256(pubkey[1:])[12:]，此处先用 sha256 占位，
-  // M1 引入 @noble/hashes/legacy 的 keccak 后替换。
-  return `0x${bytesToHex(hash.slice(12))}` as `0x${string}`
+  const hash = keccak_256(pub.slice(1))
+  return toChecksumAddress(`0x${bytesToHex(hash.slice(12))}`)
 }
 
 /**
@@ -61,7 +79,6 @@ export function generateKeyPair(): KeyPair {
  * 不参与私钥本身；scrypt 高成本参数防暴力破解。
  */
 export async function deriveKEK(passphrase: string, salt: Uint8Array): Promise<Uint8Array> {
-  // M1 占位：scrypt 实现接入 @noble/hashes/scrypt
-  const input = new TextEncoder().encode(`${passphrase}:${bytesToHex(salt)}`)
-  return sha256(input)
+  const password = new TextEncoder().encode(passphrase)
+  return scryptAsync(password, salt, SCRYPT_OPTS)
 }
