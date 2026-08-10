@@ -1,0 +1,14 @@
+{
+  "name": "@wallet-service/core",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "echo 'M1: no build step (pure TS)'",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.4.0",
+    "@noble/hashes": "^1.4.0"
+  }
+}

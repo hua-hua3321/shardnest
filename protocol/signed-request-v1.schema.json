@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wallet-service.dev/protocol/signed-request-v1.schema.json",
+  "title": "SignedRequest v1 — 平台背书签名请求",
+  "description": "钱包服务与业务平台的唯一耦合协议。平台用自持私钥签发本请求，钱包服务验签后弹窗确认并本地签名。",
+  "type": "object",
+  "required": ["v", "action", "intent_hash", "display", "user_id", "wallet_address", "nonce", "expires_at", "platform_signature"],
+  "properties": {
+    "v": { "const": 1, "description": "协议版本" },
+    "action": {
+      "enum": ["sign_message", "sign_tx", "bind_wallet", "withdraw_confirm"],
+      "description": "签名意图类型"
+    },
+    "intent_hash": { "type": "string", "pattern": "^0x[0-9a-fA-F]{64}$", "description": "平台对意图内容（提现明细/消息原文）的哈希" },
+    "display": { "type": "string", "maxLength": 200, "description": "弹窗展示的可读摘要，如『向 0x… 提现 50 USDC』" },
+    "user_id": { "type": "string", "description": "平台侧用户标识（防跨用户）" },
+    "wallet_address": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$", "description": "目标钱包地址（防跨地址）" },
+    "nonce": { "type": "string", "minLength": 16, "description": "一次性随机值，防重放（平台侧必须一次性消费）" },
+    "expires_at": { "type": "integer", "description": "过期时间（Unix 秒），钱包服务拒绝过期请求" },
+    "platform_signature": { "type": "string", "pattern": "^0x[0-9a-fA-F]{128}$", "description": "平台私钥对上述字段（v..expires_at）的 ECDSA 签名" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,7 @@
+{
+  "name": "@wallet-service/verify-sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": { "build": "echo 'M3: pending'" }
+}

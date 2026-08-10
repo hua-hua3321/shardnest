@@ -1,0 +1,15 @@
+{
+  "name": "wallet-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "bun run --cwd packages/core build",
+    "test": "bun test packages/core/test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}
