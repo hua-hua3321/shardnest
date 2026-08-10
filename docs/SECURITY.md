@@ -28,6 +28,21 @@ MCP server（无密钥）→ 本地 IPC → 签名守护进程（唯一持钥者
 | prompt injection | 平台背书 + 用户确认 | 用户误点（高价值操作二次口令） |
 | 单分片泄露 | 2-of-3 门限 | 需 2 片同时泄露 |
 | 口令+设备双丢 | — | 不可恢复（注册时披露，合理边界） |
+| **LLM 会话泄露口令/恢复码** | **解锁令牌机制**：口令/恢复码只在本地 CLI 输入，MCP 只接收 5min 单次令牌（0600 加密落盘、消费即删） | 令牌泄露窗口=5min+单次，且仍需平台背书+用户确认 |
+
+## 安全修复记录
+
+### 2026-08-10 专家审查修复（加密货币 × 安全双视角）
+
+| 级别 | 问题 | 修复 |
+|------|------|------|
+| 🔴 P0 | MCP 工具参数暴露口令/恢复码给 LLM | 解锁令牌机制（`unlock-session.ts`）：CLI `unlock` 本地输入口令+恢复码 → 组合私钥 → 令牌加密落盘（5min TTL/0600/单次）；MCP `signed_request_sign` 只接收 `unlock_token`，签名后令牌即删 |
+| 🟠 P1 | 恢复码无校验 → 输错静默恢复错误钱包 | 恢复码格式 `sn1-<index>-<hex>-<crc>`（keccak 首字节）；`restore` 地址交叉校验（expectedAddress/旧 metadata） |
+| 🟠 P1 | init/restore 非原子 | init 先发邮件后落盘；restore 写入失败回滚 meta |
+| 🟠 P1 | 签名不校验 wallet_address | `signed_request_sign` 强制本地地址一致 → `WALLET_ADDRESS_MISMATCH` |
+| 🟡 P2 | 弱口令 / canonical 分隔符歧义 / 坏私钥静默 / 输入回显 | 口令 ≥12 位强制；canonicalString JSON 序列化；`WalletVault` 私钥范围校验（0<priv<n）；CLI 掩码输入 |
+
+> 全量 61/61 测试全绿（含新增：CRC 篡改、地址不匹配、无效令牌、口令强度）。
 
 ## 依赖审计要求
 
