@@ -23,9 +23,13 @@ async function main() {
   switch (cmd) {
     case 'init': {
       const passphrase = await prompt('设置口令（>=8 位，用于加密设备分片）: ')
-      const result = await initWallet(passphrase)
+      const email = await prompt('邮箱（可选，自动发送备份分片，回车跳过）: ')
+      const result = await initWallet(passphrase, email || undefined)
       console.log('\n✅ 钱包已创建')
       console.log(`地址: ${result.address}`)
+      if (result.backupEmail) {
+        console.log(`邮箱备份: ${result.backupEmail} → ${result.backupStatus === 'sent' ? '✅ 已发送' : '⚠️ 未配置 SMTP，请手动保存恢复码'}`)
+      }
       console.log('\n⚠️  恢复码（请立即保存，丢失后设备损坏将无法找回）:')
       for (const code of result.recoveryCodes) console.log(`  ${code}`)
       break

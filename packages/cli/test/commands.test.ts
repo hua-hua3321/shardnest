@@ -72,6 +72,16 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(out.address).toBe(first.address)
   })
 
+  it('init 提供邮箱：未配置 SMTP → backupStatus=skipped（备份回退手动）', async () => {
+    const result = await initWallet(PASSPHRASE, 'user@example.com')
+    expect(result.backupEmail).toBe('user@example.com')
+    expect(result.backupStatus).toBe('skipped')
+  })
+
+  it('init 邮箱格式无效 → 抛错（不发信不建号）', async () => {
+    await expect(initWallet(PASSPHRASE, 'not-an-email')).rejects.toThrow(/邮箱格式无效/)
+  })
+
   it('恢复码编解码往返一致', () => {
     const share = { index: 7, bytes: new Uint8Array([1, 2, 3, 255]) }
     expect(decodeRecoveryCode(encodeRecoveryCode(share))).toEqual(share)

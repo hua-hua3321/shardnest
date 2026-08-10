@@ -3,14 +3,21 @@
   "version": "0.2.0",
   "type": "module",
   "main": "src/index.ts",
-  "exports": { ".": "./src/api.ts" },
-  "bin": { "shardnest": "src/index.ts" },
-  "scripts": { "test": "bun test" },
+  "exports": {
+    ".": "./src/api.ts"
+  },
+  "bin": {
+    "shardnest": "src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
   "dependencies": {
     "@noble/ciphers": "^1.0.0",
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.4.0",
     "@wallet-service/core": "workspace:*",
-    "@wallet-service/signer": "workspace:*"
+    "@wallet-service/signer": "workspace:*",
+    "nodemailer": "^9.0.5"
   }
 }

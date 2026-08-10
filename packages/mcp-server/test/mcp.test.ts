@@ -47,6 +47,17 @@ describe('shardnest MCP 薄壳', () => {
     expect(data.recovery_codes.length).toBe(2)
   })
 
+  it('wallet_create 带 email → 返回 backup 状态（未配置 SMTP = skipped）', async () => {
+    const client = await connect()
+    const res = await client.callTool({
+      name: 'wallet_create',
+      arguments: { passphrase: PASSPHRASE, email: 'user@example.com' },
+    })
+    const data = JSON.parse((res.content[0] as { text: string }).text)
+    expect(data.backup_email).toBe('user@example.com')
+    expect(data.backup_status).toBe('skipped')
+  })
+
   it('signed_request_sign：平台背书 → 确认 → 返回可验签签名', async () => {
     const client = await connect()
     // 1. 创建钱包（拿地址 + 恢复码）

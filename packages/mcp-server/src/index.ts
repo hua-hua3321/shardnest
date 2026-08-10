@@ -27,15 +27,17 @@ export function createShardnestServer(
 
   server.tool(
     'wallet_create',
-    { passphrase: z.string().min(8) },
-    async ({ passphrase }) => {
-      const result = await initWallet(passphrase)
+    { passphrase: z.string().min(8), email: z.string().email().optional() },
+    async ({ passphrase, email }) => {
+      const result = await initWallet(passphrase, email)
       return {
         content: [{
           type: 'text' as const,
           text: JSON.stringify({
             address: result.address,
             recovery_codes: result.recoveryCodes,
+            backup_email: result.backupEmail ?? null,
+            backup_status: result.backupStatus ?? null,
             warning: '请立即保存恢复码；丢失后设备损坏将无法找回',
           }),
         }],

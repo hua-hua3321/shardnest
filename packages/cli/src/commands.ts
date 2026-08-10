@@ -20,6 +20,7 @@ import {
   type Share,
 } from '@wallet-service/core'
 import { gcm } from '@noble/ciphers/aes'
+import { sendBackupShare } from './mailer'
 import { randomBytes } from '@noble/hashes/utils'
 
 /** 钱包目录（动态读取 env，便于测试隔离） */
@@ -32,6 +33,9 @@ const deviceFile = () => path.join(getHomeDir(), 'device-share.json')
 export interface InitResult {
   address: string
   recoveryCodes: string[] // 片② + 片③（用户保存）
+  /** 邮箱备份分片状态（提供邮箱时）：sent=已发送 / skipped=未配置 SMTP */
+  backupEmail?: string
+  backupStatus?: 'sent' | 'skipped'
 }
 
 /** 恢复码编码：sn1-<index>-<hex> */
@@ -71,8 +75,10 @@ async function decryptShare(enc: { data: string; salt: string }, passphrase: str
   return { index: payload[0], bytes: payload.slice(1) }
 }
 
-/** 初始化：生成密钥对 → 2-of-3 分片 → 片①口令加密存设备 → 返回恢复码②③ */
-export async function initWallet(passphrase: string): Promise<InitResult> {
+/** 初始化：生成密钥对 → 2-of-3 分片 → 片①口令加密存设备 → 返回恢复码②③
+ * 提供 email 时：自动将片③（备份分片）发送到邮箱（SMTP 未配置则 skipped）
+ */
+export async function initWallet(passphrase: string, email?: string): Promise<InitResult> {
   const { privateKey, address } = generateKeyPair()
   const shares = splitSecret(privateKey, { shares: 3, threshold: 2 })
   const enc = await encryptShare(shares[0], passphrase)
@@ -83,7 +89,17 @@ export async function initWallet(passphrase: string): Promise<InitResult> {
 
   // 内存清零
   privateKey.fill(0)
-  return { address, recoveryCodes: [shares[1], shares[2]].map(encodeRecoveryCode) }
+
+  const recoveryCodes = [shares[1], shares[2]].map(encodeRecoveryCode)
+  let backupStatus: 'sent' | 'skipped' | undefined
+  if (email) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new Error('邮箱格式无效')
+    }
+    // 片③ = recoveryCodes[1] 作为邮箱备份（单分片零信息量，安全）
+    backupStatus = await sendBackupShare(email, address, recoveryCodes[1])
+  }
+  return { address, recoveryCodes, backupEmail: email, backupStatus }
 }
 
 /** 显示地址（无需口令） */
