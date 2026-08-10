@@ -17,7 +17,7 @@
     "wallet_address": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$", "description": "目标钱包地址（防跨地址）" },
     "nonce": { "type": "string", "minLength": 16, "description": "一次性随机值，防重放（平台侧必须一次性消费）" },
     "expires_at": { "type": "integer", "description": "过期时间（Unix 秒），钱包服务拒绝过期请求" },
-    "platform_signature": { "type": "string", "pattern": "^0x[0-9a-fA-F]{128}$", "description": "平台私钥对上述字段（v..expires_at）的 ECDSA 签名" }
+    "platform_signature": { "type": "string", "pattern": "^[0-9a-fA-F]{128}$", "description": "平台私钥对上述字段（v..expires_at）的 ECDSA 签名（65 字节 hex，无 0x 前缀）" }
   },
   "additionalProperties": false
 }

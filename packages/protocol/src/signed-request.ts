@@ -46,8 +46,7 @@ export function canonicalString(req: Omit<SignedRequest, 'platform_signature'>):
 
 /** EIP-191 个人消息哈希（与 verify-sdk recoverSigner 完全一致，两端必须同构） */
 export function personalMessageHash(message: Uint8Array): Uint8Array {
-  const prefix = new TextEncoder().encode(`Ethereum Signed Message:
-${message.length}`)
+  const prefix = new TextEncoder().encode(`\x19Ethereum Signed Message:\n${message.length}`)
   const payload = new Uint8Array(prefix.length + message.length)
   payload.set(prefix)
   payload.set(message, prefix.length)
@@ -109,7 +108,11 @@ export function verifySignedRequest(
 ): VerifyResult {
   if (typeof req !== 'object' || req === null) return { ok: false, error: 'INVALID_FORMAT' }
   const r = req as SignedRequest
-  if (r.v !== 1 || typeof r.action !== 'string' || typeof r.nonce !== 'string' || r.nonce.length < 16) {
+  const ACTIONS: readonly string[] = ['sign_message', 'sign_tx', 'bind_wallet', 'withdraw_confirm']
+  if (r.v !== 1 || typeof r.action !== 'string' || !ACTIONS.includes(r.action) || typeof r.nonce !== 'string' || r.nonce.length < 16) {
+    return { ok: false, error: 'INVALID_FORMAT' }
+  }
+  if (typeof r.user_id !== 'string' || r.user_id.length === 0 || r.user_id.length > 100) {
     return { ok: false, error: 'INVALID_FORMAT' }
   }
   // 字段格式校验（防垃圾字段进入 canonical 签名路径）

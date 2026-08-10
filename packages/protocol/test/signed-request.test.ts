@@ -81,6 +81,18 @@ describe('signed_request v1', () => {
     expect(verifySignedRequest(bad, platformAddr).error).toBeTruthy()
   })
 
+  it('action 不在白名单 → INVALID_FORMAT', () => {
+    const req = issueSignedRequest(makeOptions(), platformPriv)
+    const bad = { ...req, action: 'steal_all_funds' }
+    expect(verifySignedRequest(bad, platformAddr).error).toBe('INVALID_FORMAT')
+  })
+
+  it('user_id 空 → INVALID_FORMAT', () => {
+    const req = issueSignedRequest(makeOptions(), platformPriv)
+    const bad = { ...req, user_id: '' }
+    expect(verifySignedRequest(bad, platformAddr).error).toBe('INVALID_FORMAT')
+  })
+
   it('canonicalString 确定性', () => {
     const a = makeOptions()
     const base = { v: 1 as const, action: a.action, intent_hash: a.intentHash, display: a.display, user_id: a.userId, wallet_address: a.walletAddress, nonce: a.nonce, expires_at: a.expiresAt }

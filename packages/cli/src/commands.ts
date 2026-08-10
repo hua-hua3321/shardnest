@@ -35,6 +35,7 @@ const recoveryFile = () => path.join(getHomeDir(), 'recovery-codes.txt')
 /** 恢复码落盘（0600 明文，用户自持责任；与纸备份等价，供 MCP 场景免 LLM 交付） */
 export async function saveRecoveryCodes(codes: string[]): Promise<string> {
   const file = recoveryFile()
+  await fs.mkdir(path.dirname(file), { recursive: true })
   const content = [
     '# shardnest 恢复码（请妥善保管，勿转发/上传）',
     '# 任意 2 个可恢复钱包；单凭 1 个无法动用资金',
@@ -135,14 +136,13 @@ export async function initWallet(passphrase: string, email?: string): Promise<In
     backupStatus = await sendBackupShare(email, address, recoveryCodes[1])
   }
 
-  // 2. 全部成功后原子落盘
+  // 2. 可失败操作全部前置（含恢复码落盘——失败则用户拿不到恢复码=永久锁死）
+  const recoveryFileWritten = await saveRecoveryCodes(recoveryCodes)
   await fs.mkdir(getHomeDir(), { recursive: true })
   await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
   await fs.writeFile(deviceFile(), JSON.stringify({ version: 1, share: enc }, null, 2), { mode: 0o600 })
   privateKey.fill(0)
 
-  // 恢复码落盘（0600，用户自持；MCP 场景经此交付不经 LLM）
-  const recoveryFileWritten = await saveRecoveryCodes(recoveryCodes)
   return { address, recoveryCodes, backupEmail: email, backupStatus, recoveryFile: recoveryFileWritten }
 }
 
@@ -157,28 +157,31 @@ export async function signMessage(passphrase: string, recoveryCode: string, mess
   const enc = JSON.parse(await fs.readFile(deviceFile(), 'utf8')) as { share: { data: string; salt: string } }
   const share1 = await decryptShare(enc.share, passphrase)
   const share2 = decodeRecoveryCode(recoveryCode)
+  const { WalletVault } = await import('@wallet-service/signer')
+  const vault = new WalletVault()
   try {
-    const { WalletVault } = await import('@wallet-service/signer')
-    const vault = new WalletVault()
     vault.unlock([share1, share2])
     const sig = vault.signMessage(new TextEncoder().encode(message))
     const addr = vault.getAddress()
-    vault.wipe()
     return JSON.stringify({ address: addr, signature: Buffer.from(sig).toString('hex') })
   } finally {
+    vault.wipe() // 异常路径也清零 vault 内组合私钥
     share1.bytes.fill(0)
     share2.bytes.fill(0)
   }
 }
 
 /** 恢复：输入任意 2 个恢复码 → 重组 → 新设备片（口令加密）+ 新恢复码（reshare）
- * 地址交叉校验（P1-1）：旧 metadata 存在或提供 expectedAddress 时，恢复地址
- * 不一致立即报错——防止输错恢复码静默恢复出「错误钱包」
+ * 地址交叉校验（P1-1）：expectedAddress 或旧 metadata 地址不一致立即报错——
+ * 防止输错恢复码静默恢复出「错误钱包」（新设备恢复场景必须传 expectedAddress）
+ * 提供 email 时：自动将新片③发送到邮箱（更新旧邮箱备份；旧邮件中的分片仍有效，建议删除）
+ * 原子性：所有可失败操作（含邮件/恢复码落盘）成功后才写 meta/device，失败整体回滚
  */
 export async function restoreWallet(
   passphrase: string,
   recoveryCodes: [string, string],
   expectedAddress?: string,
+  email?: string,
 ): Promise<InitResult> {
   validatePassphrase(passphrase)
   const shares = recoveryCodes.map(decodeRecoveryCode)
@@ -187,31 +190,59 @@ export async function restoreWallet(
   const privateKey = combineShares([fresh[0], fresh[1]])
   const { privateKeyToAddress } = await import('@wallet-service/core')
   const address = privateKeyToAddress(privateKey)
-  privateKey.fill(0)
 
   // 地址交叉校验：期望地址 or 旧 metadata 地址
   const want = expectedAddress ?? (await readOldAddress())
   if (want && want.toLowerCase() !== address.toLowerCase()) {
+    privateKey.fill(0)
     throw new Error(`恢复出的地址 (${address}) 与目标地址 (${want}) 不一致——恢复码可能输错，操作已中止`)
   }
 
-  await fs.mkdir(getHomeDir(), { recursive: true })
-  await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
+  const newCodes = [fresh[1], fresh[2]].map(encodeRecoveryCode)
+
+  // 可失败操作前置：邮箱备份（新片③）+ 恢复码落盘
+  let backupStatus: 'sent' | 'skipped' | undefined
+  if (email) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      privateKey.fill(0)
+      throw new Error('邮箱格式无效')
+    }
+    backupStatus = await sendBackupShare(email, address, newCodes[1])
+  }
+  const recoveryFileWritten = await saveRecoveryCodes(newCodes)
+
+  // 原子落盘 + 回滚
   try {
+    await fs.mkdir(getHomeDir(), { recursive: true })
+    await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
     await fs.writeFile(deviceFile(), JSON.stringify({ version: 1, share: enc }, null, 2), { mode: 0o600 })
   } catch (err) {
-    await fs.rm(metaFile(), { force: true }) // 回滚：不留下半成品
+    await fs.rm(metaFile(), { force: true })
+    await fs.rm(deviceFile(), { force: true })
     throw err
+  } finally {
+    privateKey.fill(0)
   }
 
-  const newCodes = [fresh[1], fresh[2]].map(encodeRecoveryCode)
-  const recoveryFileWritten = await saveRecoveryCodes(newCodes)
   return {
     address,
     recoveryCodes: newCodes,
     recoveryFile: recoveryFileWritten,
-    note: '如曾使用邮箱备份，请重新运行 init 邮箱流程更新邮箱中的备份分片（旧邮件中的分片仍有效，建议删除）',
+    backupEmail: email,
+    backupStatus,
+    note: email
+      ? '新备份分片已发送到邮箱；请删除旧邮件中的备份分片（旧分片集仍可重组同一私钥）'
+      : '如曾使用邮箱备份，请提供 email 重新备份（旧邮件中的分片仍有效，建议删除）',
   }
+}
+
+/** 从本地恢复码文件读取恢复码（MCP 场景：路径进 LLM，内容不进） */
+export async function readRecoveryCodesFromFile(filePath?: string): Promise<string[]> {
+  const file = filePath ?? path.join(getHomeDir(), 'recovery-codes.txt')
+  const content = await fs.readFile(file, 'utf8')
+  const codes = content.split('\n').filter((l) => l.trim().startsWith('sn1-')).map((l) => l.trim())
+  if (codes.length < 2) throw new Error('恢复码文件不足 2 片')
+  return codes
 }
 
 /** 创建解锁令牌：本地口令+恢复码 → 组合私钥 → 短期单次解锁会话（P0-1） */
@@ -219,12 +250,12 @@ export async function createUnlockToken(passphrase: string, recoveryCode: string
   const enc = JSON.parse(await fs.readFile(deviceFile(), 'utf8')) as { share: { data: string; salt: string } }
   const share1 = await decryptShare(enc.share, passphrase)
   const share2 = decodeRecoveryCode(recoveryCode)
+  let privateKey: Uint8Array | null = null
   try {
-    const privateKey = combineShares([share1, share2])
-    const token = await createUnlockSession(privateKey)
-    privateKey.fill(0)
-    return token
+    privateKey = combineShares([share1, share2])
+    return await createUnlockSession(privateKey)
   } finally {
+    privateKey?.fill(0) // 异常路径也清零
     share1.bytes.fill(0)
     share2.bytes.fill(0)
   }

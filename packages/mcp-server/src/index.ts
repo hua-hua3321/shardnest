@@ -14,7 +14,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { verifySignedRequest, type SignedRequest } from '@wallet-service/protocol'
-import { initWallet, getAddress, restoreWallet } from '@wallet-service/cli'
+import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile } from '@wallet-service/cli'
 import { defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession } from '@wallet-service/signer'
 
 export const PLATFORM_ADDRESS = process.env.SHARDNEST_PLATFORM_ADDRESS ?? ''
@@ -115,18 +115,38 @@ export function createShardnestServer(
 
   server.tool(
     'wallet_restore',
-    { passphrase: z.string().min(8), recovery_code_1: z.string(), recovery_code_2: z.string() },
-    async ({ passphrase, recovery_code_1, recovery_code_2 }) => {
-      const result = await restoreWallet(passphrase, [recovery_code_1, recovery_code_2])
-      return {
-        content: [{
-          type: 'text' as const,
-          text: JSON.stringify({
-            address: result.address,
-            recovery_codes: result.recoveryCodes,
-            warning: '旧恢复码请作废销毁（旧分片集仍可重组同一私钥）',
-          }),
-        }],
+    {
+      // 凭证隔离：恢复码经本地文件路径交付（内容不进 LLM）；口令为新设口令（无本地文件不可用）
+      recovery_file_path: z.string().optional(),
+      passphrase: z.string().min(12),
+      expected_address: z.string().regex(/^0x[0-9a-fA-F]{40}$/, '期望地址格式无效').optional(),
+      email: z.string().email().optional(),
+    },
+    async ({ recovery_file_path, passphrase, expected_address, email }) => {
+      try {
+        const codes = await readRecoveryCodesFromFile(recovery_file_path)
+        const result = await restoreWallet(
+          passphrase,
+          [codes[0], codes[1]],
+          expected_address,
+          email,
+        )
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              address: result.address,
+              // ⚠️ 新恢复码不经 LLM：只返回本地文件路径
+              recovery_codes_file: result.recoveryFile ?? null,
+              backup_email: result.backupEmail ?? null,
+              backup_status: result.backupStatus ?? null,
+              note: result.note ?? null,
+              warning: '新恢复码已写入本地文件，请立即查看并妥善保存；旧恢复码请作废销毁',
+            }),
+          }],
+        }
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'RESTORE_FAILED', message: (err as Error).message }) }] }
       }
     },
   )

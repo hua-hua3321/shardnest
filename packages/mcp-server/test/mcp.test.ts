@@ -67,6 +67,44 @@ describe('shardnest MCP 薄壳', () => {
     expect(created.recoveryCodes.length).toBe(2)
   })
 
+  it('wallet_restore：恢复码经本地文件读取 → 新恢复码只返回文件路径（凭证隔离）', async () => {
+    const client = await connect()
+    // 1. 创建钱包（恢复码落盘 recovery-codes.txt）
+    const created = await createWallet(client, PASSPHRASE)
+    // 2. 恢复：期望地址校验 + 恢复码从文件读取（不经 LLM）
+    const res = await client.callTool({
+      name: 'wallet_restore',
+      arguments: {
+        passphrase: PASSPHRASE,
+        expected_address: created.address,
+      },
+    })
+    const out = JSON.parse((res.content[0] as { text: string }).text)
+    expect(out.address).toBe(created.address)
+    // 凭证隔离：响应无恢复码明文，只有文件路径
+    expect(out.recovery_codes).toBeUndefined()
+    expect(out.recovery_codes_file).toBeTruthy()
+    expect(out.note).toBeTruthy()
+    // 3. 新恢复码文件可读取（2 片）
+    const fileCodes = (await fs.readFile(path.join(getHomeDir(), 'recovery-codes.txt'), 'utf8'))
+      .split('\n').filter((l) => l.startsWith('sn1-'))
+    expect(fileCodes.length).toBe(2)
+  })
+
+  it('wallet_restore 期望地址不匹配 → RESTORE_FAILED（防输错恢复码）', async () => {
+    const client = await connect()
+    const created = await createWallet(client, PASSPHRASE)
+    const res = await client.callTool({
+      name: 'wallet_restore',
+      arguments: {
+        passphrase: PASSPHRASE,
+        expected_address: '0x0000000000000000000000000000000000000000',
+      },
+    })
+    const out = JSON.parse((res.content[0] as { text: string }).text)
+    expect(out.error).toBe('RESTORE_FAILED')
+  })
+
   it('wallet_create 口令 <12 位 → 拒绝（与 CLI 强度一致）', async () => {
     const client = await connect()
     const res = await client.callTool({ name: 'wallet_create', arguments: { passphrase: 'short8' } })

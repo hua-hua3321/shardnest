@@ -72,13 +72,19 @@ async function main() {
     }
     case 'restore': {
       const passphrase = await promptSecret('设置新口令（>=12 位）: ')
-      const c1 = await prompt('恢复码 1: ')
-      const c2 = await prompt('恢复码 2: ')
-      const result = await restoreWallet(passphrase, [c1, c2])
+      const c1 = await promptSecret('恢复码 1（掩码输入）: ')
+      const c2 = await promptSecret('恢复码 2（掩码输入）: ')
+      const expected = await prompt('期望地址（可选，强烈建议输入以校验恢复正确性，回车跳过）: ')
+      const email = await prompt('邮箱（可选，自动更新邮箱备份分片，回车跳过）: ')
+      const result = await restoreWallet(passphrase, [c1, c2], expected || undefined, email || undefined)
       console.log('\n✅ 钱包已恢复')
       console.log(`地址: ${result.address}`)
+      if (result.backupEmail) {
+        console.log(`邮箱备份: ${result.backupEmail} → ${result.backupStatus === 'sent' ? '✅ 已发送' : '⚠️ 未配置 SMTP，请手动保存恢复码'}`)
+      }
       console.log('\n⚠️  新恢复码（旧恢复码请作废销毁）:')
       for (const code of result.recoveryCodes) console.log(`  ${code}`)
+      if (result.note) console.log(`\n📝 ${result.note}`)
       break
     }
     default:

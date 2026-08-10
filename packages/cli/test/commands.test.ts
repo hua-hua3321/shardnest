@@ -88,6 +88,21 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(() => decodeRecoveryCode('bad-format')).toThrow()
   })
 
+  it('restore 带 email：未配置 SMTP → backupStatus=skipped + note 提示', async () => {
+    const first = await initWallet(PASSPHRASE)
+    const restored = await restoreWallet(
+      PASSPHRASE,
+      [first.recoveryCodes[0], first.recoveryCodes[1]],
+      undefined,
+      'backup@example.com',
+    )
+    expect(restored.backupEmail).toBe('backup@example.com')
+    expect(restored.backupStatus).toBe('skipped')
+    expect(restored.note).toContain('邮箱')
+    // 恢复后地址一致（私钥不变）
+    expect(restored.address).toBe(first.address)
+  })
+
   it('恢复码 index 越界（999）→ 解码抛错（P1-B：GF 域 x 坐标校验）', () => {
     const share = { index: 2, bytes: new Uint8Array([1, 2, 3]) }
     const code = encodeRecoveryCode(share)

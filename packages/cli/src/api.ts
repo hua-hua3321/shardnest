@@ -11,5 +11,6 @@ export {
   decodeRecoveryCode,
   createUnlockToken,
   validatePassphrase,
+  readRecoveryCodesFromFile,
   type InitResult,
 } from './commands'
