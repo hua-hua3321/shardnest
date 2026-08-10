@@ -82,9 +82,27 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     await expect(initWallet(PASSPHRASE, 'not-an-email')).rejects.toThrow(/邮箱格式无效/)
   })
 
-  it('恢复码编解码往返一致', () => {
+  it('恢复码编解码往返一致（含 CRC 校验）', () => {
     const share = { index: 7, bytes: new Uint8Array([1, 2, 3, 255]) }
     expect(decodeRecoveryCode(encodeRecoveryCode(share))).toEqual(share)
     expect(() => decodeRecoveryCode('bad-format')).toThrow()
+  })
+
+  it('恢复码 CRC 被篡改 → 解码抛错（防手输/OCR 错误静默恢复错误钱包）', () => {
+    const share = { index: 7, bytes: new Uint8Array([1, 2, 3, 255]) }
+    const code = encodeRecoveryCode(share)
+    const tampered = code.slice(0, -1) + (code.endsWith('0') ? '1' : '0')
+    expect(() => decodeRecoveryCode(tampered)).toThrow(/校验失败/)
+  })
+
+  it('restore 地址不匹配（expectedAddress 错误）→ 抛错中止', async () => {
+    const first = await initWallet(PASSPHRASE)
+    await expect(
+      restoreWallet(PASSPHRASE, [first.recoveryCodes[0], first.recoveryCodes[1]], '0x0000000000000000000000000000000000000000'),
+    ).rejects.toThrow(/不一致/)
+  })
+
+  it('口令 <12 位 → 拒绝（强度校验）', async () => {
+    await expect(initWallet('short')).rejects.toThrow(/至少 12 位/)
   })
 })

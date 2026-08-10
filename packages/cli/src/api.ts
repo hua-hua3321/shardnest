@@ -9,5 +9,7 @@ export {
   restoreWallet,
   encodeRecoveryCode,
   decodeRecoveryCode,
+  createUnlockToken,
+  validatePassphrase,
   type InitResult,
 } from './commands'

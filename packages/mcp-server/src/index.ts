@@ -14,8 +14,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { verifySignedRequest, type SignedRequest } from '@wallet-service/protocol'
-import { initWallet, getAddress, restoreWallet, signMessage } from '@wallet-service/cli'
-import { defaultApproval, type ApprovalHandler } from '@wallet-service/signer'
+import { initWallet, getAddress, restoreWallet } from '@wallet-service/cli'
+import { defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession } from '@wallet-service/signer'
 
 export const PLATFORM_ADDRESS = process.env.SHARDNEST_PLATFORM_ADDRESS ?? ''
 
@@ -61,10 +61,9 @@ export function createShardnestServer(
     'signed_request_sign',
     {
       signed_request: z.unknown(),
-      passphrase: z.string(),
-      recovery_code: z.string(),
+      unlock_token: z.string(),
     },
-    async ({ signed_request, passphrase, recovery_code }) => {
+    async ({ signed_request, unlock_token }) => {
       // 闸门 1：平台背书验签（无平台私钥无法伪造；nonce/时效校验）
       if (!platformAddress) {
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'PLATFORM_ADDRESS_NOT_CONFIGURED' }) }] }
@@ -75,15 +74,41 @@ export function createShardnestServer(
       }
       const req = signed_request as SignedRequest
 
+      // 纵深防御：wallet_address 必须与本地钱包一致（P1-3）
+      let localAddress: string
+      try {
+        localAddress = await getAddress()
+      } catch {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'NO_WALLET' }) }] }
+      }
+      if (req.wallet_address.toLowerCase() !== localAddress.toLowerCase()) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'WALLET_ADDRESS_MISMATCH' }) }] }
+      }
+
       // 闸门 2：用户确认（MCP 宿主注入；默认仅放行 sign_message）
       const approved = await approval({ action: req.action, display: req.display })
       if (!approved) {
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'USER_REJECTED' }) }] }
       }
 
-      // 签名内容 = 平台背书的意图（intent_hash 由平台生成，本层不构造）
-      const out = await signMessage(passphrase, recovery_code, `${req.action}:${req.intent_hash}`)
-      return { content: [{ type: 'text' as const, text: out }] }
+      // 解锁令牌（本地 unlock 生成，口令/恢复码永不经 LLM；单次使用 + 5min TTL）
+      let privateKey: Uint8Array
+      try {
+        privateKey = await consumeUnlockSession(unlock_token)
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'UNLOCK_INVALID', message: (err as Error).message }) }] }
+      }
+      try {
+        // 签名内容 = 平台背书的意图（intent_hash 由平台生成，本层不构造）
+        const vault = new WalletVault()
+        vault.unlockPrivateKey(privateKey)
+        const sig = vault.signMessage(new TextEncoder().encode(`${req.action}:${req.intent_hash}`))
+        const address = vault.getAddress()
+        vault.wipe()
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ address, signature: Buffer.from(sig).toString('hex') }) }] }
+      } finally {
+        privateKey.fill(0)
+      }
     },
   )
 

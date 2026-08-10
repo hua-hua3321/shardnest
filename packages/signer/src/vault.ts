@@ -21,6 +21,17 @@ function personalMessageHash(message: Uint8Array): Uint8Array {
   return keccak_256(payload)
 }
 
+/** secp256k1 曲线阶 n（私钥必须 < n，组合结果校验） */
+const CURVE_ORDER = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141')
+
+/** 私钥有效性校验（0 < priv < n），无效抛错防静默坏签名 */
+function assertValidPrivateKey(priv: Uint8Array): void {
+  const value = BigInt('0x' + Array.from(priv).map((b) => b.toString(16).padStart(2, '0')).join(''))
+  if (value <= 0n || value >= CURVE_ORDER) {
+    throw new Error('组合出的私钥无效（恢复码可能不匹配或已损坏）')
+  }
+}
+
 export class WalletVault {
   private privKey: Uint8Array | null = null
 
@@ -32,7 +43,16 @@ export class WalletVault {
   /** 用任意 threshold 个分片解锁私钥（内存组合，用完调用 wipe） */
   unlock(shares: Share[]): void {
     if (this.privKey) this.wipe()
-    this.privKey = combineShares(shares)
+    const priv = combineShares(shares)
+    assertValidPrivateKey(priv)
+    this.privKey = priv
+  }
+
+  /** 直接注入已解锁的私钥（解锁会话通道；用完必须 wipe） */
+  unlockPrivateKey(privateKey: Uint8Array): void {
+    if (this.privKey) this.wipe()
+    assertValidPrivateKey(privateKey)
+    this.privKey = privateKey
   }
 
   /** 私钥 → 地址（EIP-55 checksum） */

@@ -7,6 +7,7 @@ import { createShardnestServer } from '../src/index'
 import { issueSignedRequest } from '@wallet-service/protocol'
 import { generatePrivateKey, privateKeyToAddress } from '@wallet-service/core'
 import { recoverSigner } from '@wallet-service/verify-sdk'
+import { createUnlockToken } from '@wallet-service/cli'
 
 const TEST_HOME = path.join(process.cwd(), '.test-shardnest-mcp')
 
@@ -72,17 +73,60 @@ describe('shardnest MCP 薄壳', () => {
       nonce: 'nonce-mcp-00000001',
       expiresAt: Math.floor(Date.now() / 1000) + 300,
     }, platformPriv)
-    // 3. 签名（验背书 → 确认 → 本地签名）
+    // 3. 本地解锁（口令+恢复码在本地生成令牌，不经 LLM）
+    const token = await createUnlockToken(PASSPHRASE, created.recovery_codes[0])
+    // 4. 签名（验背书 → 地址校验 → 确认 → 令牌消费 → 本地签名）
     const signRes = await client.callTool({
       name: 'signed_request_sign',
-      arguments: { signed_request: req, passphrase: PASSPHRASE, recovery_code: created.recovery_codes[0] },
+      arguments: { signed_request: req, unlock_token: token },
     })
     const out = JSON.parse((signRes.content[0] as { text: string }).text)
     expect(out.address).toBe(created.address)
-    // 4. 验签还原同一地址（平台侧可验证）
+    // 5. 验签还原同一地址（平台侧可验证）
     const sig = Uint8Array.from(Buffer.from(out.signature, 'hex'))
     const recovered = recoverSigner(`bind_wallet:${req.intent_hash}`, sig)
     expect(recovered.toLowerCase()).toBe(created.address.toLowerCase())
+  })
+
+  it('wallet_address 与本地不一致 → WALLET_ADDRESS_MISMATCH 拒绝（纵深防御）', async () => {
+    const client = await connect()
+    const created = JSON.parse(((await client.callTool({ name: 'wallet_create', arguments: { passphrase: PASSPHRASE } })).content[0] as { text: string }).text)
+    const token = await createUnlockToken(PASSPHRASE, created.recovery_codes[0])
+    const req = issueSignedRequest({
+      action: 'bind_wallet',
+      intentHash: '0x' + 'ab'.repeat(32),
+      display: '绑定其他钱包地址',
+      userId: 'user-42',
+      walletAddress: '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf', // 与本地不同
+      nonce: 'nonce-mcp-00000009',
+      expiresAt: Math.floor(Date.now() / 1000) + 300,
+    }, platformPriv)
+    const res = await client.callTool({
+      name: 'signed_request_sign',
+      arguments: { signed_request: req, unlock_token: token },
+    })
+    const out = JSON.parse((res.content[0] as { text: string }).text)
+    expect(out.error).toBe('WALLET_ADDRESS_MISMATCH')
+  })
+
+  it('无效解锁令牌 → UNLOCK_INVALID（单次使用 + 过期防护）', async () => {
+    const client = await connect()
+    const created = JSON.parse(((await client.callTool({ name: 'wallet_create', arguments: { passphrase: PASSPHRASE } })).content[0] as { text: string }).text)
+    const req = issueSignedRequest({
+      action: 'bind_wallet',
+      intentHash: '0x' + 'cd'.repeat(32),
+      display: '绑定钱包',
+      userId: 'user-42',
+      walletAddress: created.address,
+      nonce: 'nonce-mcp-00000010',
+      expiresAt: Math.floor(Date.now() / 1000) + 300,
+    }, platformPriv)
+    const res = await client.callTool({
+      name: 'signed_request_sign',
+      arguments: { signed_request: req, unlock_token: '0'.repeat(64) },
+    })
+    const out = JSON.parse((res.content[0] as { text: string }).text)
+    expect(out.error).toBe('UNLOCK_INVALID')
   })
 
   it('伪造背书（非平台签发）→ BAD_SIGNATURE 拒绝', async () => {
@@ -98,9 +142,10 @@ describe('shardnest MCP 薄壳', () => {
       nonce: 'nonce-mcp-00000002',
       expiresAt: Math.floor(Date.now() / 1000) + 300,
     }, fake)
+    const token = await createUnlockToken(PASSPHRASE, created.recovery_codes[0])
     const res = await client.callTool({
       name: 'signed_request_sign',
-      arguments: { signed_request: req, passphrase: PASSPHRASE, recovery_code: created.recovery_codes[0] },
+      arguments: { signed_request: req, unlock_token: token },
     })
     const out = JSON.parse((res.content[0] as { text: string }).text)
     expect(out.error).toBe('BAD_SIGNATURE')
@@ -118,9 +163,10 @@ describe('shardnest MCP 薄壳', () => {
       nonce: 'nonce-mcp-00000003',
       expiresAt: Math.floor(Date.now() / 1000) + 300,
     }, platformPriv)
+    const token = await createUnlockToken(PASSPHRASE, created.recovery_codes[0])
     const res = await client.callTool({
       name: 'signed_request_sign',
-      arguments: { signed_request: req, passphrase: PASSPHRASE, recovery_code: created.recovery_codes[0] },
+      arguments: { signed_request: req, unlock_token: token },
     })
     const out = JSON.parse((res.content[0] as { text: string }).text)
     expect(out.error).toBe('USER_REJECTED')

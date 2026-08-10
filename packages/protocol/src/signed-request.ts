@@ -30,9 +30,18 @@ export interface SignedRequest {
   platform_signature: string
 }
 
-/** 参与签名的字段（v..expires_at，按序拼接） */
+/** 参与签名的字段（v..expires_at）——JSON 数组序列化，杜绝字段值含分隔符的歧义 */
 export function canonicalString(req: Omit<SignedRequest, 'platform_signature'>): string {
-  return [req.v, req.action, req.intent_hash, req.display, req.user_id, req.wallet_address, req.nonce, req.expires_at].join('|')
+  return JSON.stringify([
+    req.v,
+    req.action,
+    req.intent_hash,
+    req.display,
+    req.user_id,
+    req.wallet_address,
+    req.nonce,
+    req.expires_at,
+  ])
 }
 
 /** EIP-191 个人消息哈希（与 verify-sdk recoverSigner 完全一致，两端必须同构） */
