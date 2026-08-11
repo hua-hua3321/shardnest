@@ -18,6 +18,8 @@ export {
   wipeWallet,
   WIPE_CONFIRM_PHRASE,
   listSavedFiles,
+  getRecoveryFileStatus,
+  type RecoveryFileStatus,
   type WipeScope,
   type InitResult,
 } from './commands'

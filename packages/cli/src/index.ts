@@ -50,7 +50,8 @@ async function main() {
     }
     case 'unlock': {
       const passphrase = await promptSecret('口令: ')
-      const code = await prompt('恢复码: ')
+      await printRecoverySourceGuide()
+      const code = await promptSecret('恢复码（掩码输入）: ')
       const token = await createUnlockToken(passphrase, code)
       console.log('\n🔓 解锁令牌（5 分钟有效，单次使用，请勿在聊天中转发）:')
       console.log(token)
@@ -84,7 +85,8 @@ async function main() {
     case 'sign': {
       if (args.length === 0) throw new Error('用法: shardnest sign <message>')
       const passphrase = await promptSecret('口令: ')
-      const code = await prompt('恢复码: ')
+      await printRecoverySourceGuide()
+      const code = await promptSecret('恢复码（掩码输入）: ')
       console.log(await signMessage(passphrase, code, args.join(' ')))
       break
     }
@@ -137,6 +139,7 @@ async function main() {
         result = await exportMnemonicFromCodes(c1, c2)
       } else {
         const passphrase = await promptSecret('口令: ')
+        await printRecoverySourceGuide()
         const code = await promptSecret('恢复码（掩码输入）: ')
         result = await exportMnemonic(passphrase, code)
       }
@@ -164,6 +167,7 @@ async function main() {
     }
     case 'restore': {
       const passphrase = await promptSecret('设置新口令（>=12 位）: ')
+      await printRecoverySourceGuide()
       const c1 = await promptSecret('恢复码 1（掩码输入）: ')
       const c2 = await promptSecret('恢复码 2（掩码输入）: ')
       const expected = await prompt('期望地址（可选，强烈建议输入以校验恢复正确性，回车跳过）: ')

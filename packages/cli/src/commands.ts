@@ -447,6 +447,22 @@ async function secureDelete(file: string): Promise<void> {
 /** wipe 范围：all=本机全部密钥材料 / saved=仅'需用户保存'的明文备份（恢复码+助记词） */
 export type WipeScope = 'all' | 'saved'
 
+/** 恢复码本地存储状态（按 recovery-codes.txt 实况判断，供交互引导） */
+export type RecoveryFileStatus = 'emailed' | 'local-only' | 'missing'
+
+/** 检测恢复码存储状态：1 片=邮箱已送达（片③在邮箱）/ 2 片=本地集中 / 无文件 */
+export async function getRecoveryFileStatus(): Promise<RecoveryFileStatus> {
+  try {
+    const content = await fs.readFile(recoveryFile(), 'utf8')
+    const count = content.split('\n').filter((l) => l.trim().startsWith('sn1-')).length
+    if (count >= 2) return 'local-only'
+    if (count === 1) return 'emailed'
+    return 'missing'
+  } catch {
+    return 'missing'
+  }
+}
+
 /** 列出当前存在的'需用户保存'文件（basename，供展示确认） */
 export async function listSavedFiles(): Promise<string[]> {
   const names: string[] = []

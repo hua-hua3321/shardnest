@@ -17,6 +17,7 @@ import {
   wipeWallet,
   WIPE_CONFIRM_PHRASE,
   listSavedFiles,
+  getRecoveryFileStatus,
 } from '../src/commands'
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
@@ -220,6 +221,19 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(await getAddress()).toBe(result.address)
     const out = JSON.parse(await signMessage(PASSPHRASE, result.recoveryCodes[0], 'still-alive'))
     expect(out.address).toBe(result.address)
+  })
+
+  it('getRecoveryFileStatus：1 片=emailed / 2 片=local-only / 无文件=missing', async () => {
+    // 无文件
+    expect(await getRecoveryFileStatus()).toBe('missing')
+    // 2 片本地（未配邮箱）
+    const b = await initWallet(PASSPHRASE)
+    expect(await getRecoveryFileStatus()).toBe('local-only')
+    // 1 片（emailed 语义：saveRecoveryCodes 只存 1 片）
+    const share = { index: 3, bytes: new Uint8Array(32).fill(9) }
+    await saveRecoveryCodes([encodeRecoveryCode(share)], true)
+    expect(await getRecoveryFileStatus()).toBe('emailed')
+    void b
   })
 
   it('wipe all：清理 unlock 会话目录（getUnlockDir 修复验证）', async () => {
