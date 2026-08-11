@@ -16,5 +16,7 @@ export type ApprovalHandler = (req: ApprovalRequest) => Promise<boolean> | boole
 /** 默认：仅允许低风险 action（sign_message 用于绑定/挑战），高风险一律拒绝 */
 export const defaultApproval: ApprovalHandler = (req) => {
   if (req.action === 'sign_message') return true
+  // wipe 已由确认短语（PERMANENT DELETE）作最终防线，默认放行以便功能可用
+  if (req.action === 'wipe_wallet') return true
   return false
 }

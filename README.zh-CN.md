@@ -34,8 +34,9 @@ bun packages/cli/src/index.ts restore                      # 用 2 个恢复码�
 ```
 metadata.json        明文 { address }——地址非秘密
 device-share.json    片①，口令加密（scrypt KEK + AES-GCM，0600）
-recovery-codes.txt   片②+③ 明文恢复码（0600，用户自持责任）
+recovery-codes.txt   片②（+片③，仅邮箱未送达时）明文恢复码（0600，用户自持责任）
 unlock/              令牌会话：unlock-*.bin / passphrase-*.bin / consuming-*.bin
+mnemonic.txt          （可选）24 词助记词 = 完整私钥备份（单点，0600）
 ```
 
 ## 密钥管理模型

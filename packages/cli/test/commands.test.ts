@@ -10,6 +10,7 @@ import {
   encodeRecoveryCode,
   decodeRecoveryCode,
   restoreFromMnemonic,
+  createUnlockToken,
   exportMnemonic,
   exportMnemonicFromCodes,
   saveRecoveryCodes,
@@ -219,6 +220,19 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(await getAddress()).toBe(result.address)
     const out = JSON.parse(await signMessage(PASSPHRASE, result.recoveryCodes[0], 'still-alive'))
     expect(out.address).toBe(result.address)
+  })
+
+  it('wipe all：清理 unlock 会话目录（getUnlockDir 修复验证）', async () => {
+    const result = await initWallet(PASSPHRASE)
+    // 创建解锁令牌 → unlock/ 目录出现会话文件
+    const token = await createUnlockToken(PASSPHRASE, result.recoveryCodes[0])
+    expect(token.length).toBe(64)
+    const unlockDir = path.join(getHomeDir(), 'unlock')
+    const entriesBefore = await fs.readdir(unlockDir)
+    expect(entriesBefore.length).toBeGreaterThan(0)
+    // wipe all → unlock 目录被清理
+    await wipeWallet(WIPE_CONFIRM_PHRASE, 'all')
+    await expect(fs.readdir(unlockDir)).rejects.toThrow() // 目录已删除
   })
 
   it('restoreFromMnemonic 无效助记词 → 抛错', async () => {

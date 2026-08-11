@@ -34,8 +34,9 @@ Files under `~/.shardnest/` (override with `SHARDNEST_HOME`):
 ```
 metadata.json        plaintext { address } — address is not secret
 device-share.json    share ①, encrypted with passphrase (scrypt KEK + AES-GCM, 0600)
-recovery-codes.txt   shares ②+③ plaintext recovery codes (0600, user responsibility)
+recovery-codes.txt   share ② (+③ only when email not sent) plaintext recovery codes (0600)
 unlock/              token sessions: unlock-*.bin / passphrase-*.bin / consuming-*.bin
+mnemonic.txt          (optional) 24-word mnemonic = full private key backup (single point, 0600)
 ```
 
 ## Key management model
@@ -52,7 +53,7 @@ SHARDNEST_HOME=~/.shardnest \
 bun packages/mcp-server/src/index.ts
 ```
 
-Tools: `wallet_create` · `wallet_address` · `signed_request_sign` · `wallet_restore`.
+Tools: `wallet_create` · `wallet_address` · `signed_request_sign` · `wallet_restore` · `wallet_mnemonic_export` · `wallet_wipe`.
 Sensitive credentials are never tool arguments — use `passphrase_token` / `recovery_file_path` / `recovery_codes_file` instead.
 
 Email backup (optional): `SHARDNEST_SMTP_HOST / PORT / USER / PASS / FROM / TLS`.

@@ -146,6 +146,30 @@ describe('shardnest MCP 薄壳', () => {
     expect(created.recoveryCodes.length).toBe(2)
   })
 
+  it('wallet_restore：文件路径穿越 → 拒绝（任意文件读取防护）', async () => {
+    const client = await connect()
+    const created = await createWallet(client, PASSPHRASE)
+    const res = await client.callTool({
+      name: 'wallet_restore',
+      arguments: {
+        passphrase_token: await createPassphraseSession(PASSPHRASE),
+        expected_address: created.address,
+        mnemonic_file_path: '/etc/passwd', // 钱包目录外路径
+      },
+    })
+    // assertSafePath 抛错 → 结构化 RESTORE_FAILED（isError=false），message 含路径约束说明
+    const out = JSON.parse((res.content[0] as { text: string }).text)
+    expect(out.error).toBe('RESTORE_FAILED')
+    expect(out.message).toMatch(/钱包目录|逃逸/)
+  })
+
+  it('wallet_mnemonic_export：用户拒绝确认 → USER_REJECTED（私钥提取闸门）', async () => {
+    const client = await connect(() => false)
+    const res = await client.callTool({ name: 'wallet_mnemonic_export', arguments: {} })
+    const out = JSON.parse((res.content[0] as { text: string }).text)
+    expect(out.error).toBe('USER_REJECTED')
+  })
+
   it('wallet_restore：恢复码经本地文件读取 → 新恢复码只返回文件路径（凭证隔离）', async () => {
     const client = await connect()
     // 1. 创建钱包（恢复码落盘 recovery-codes.txt）

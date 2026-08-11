@@ -48,7 +48,7 @@ cli（命令实现，MCP 的库 API 经 src/api.ts 的 exports 字段暴露）
   └─ index.ts     CLI 入口（掩码输入 promptSecret）
 verify-sdk（平台侧验签，verify-only 零密钥）
 protocol（signed_request v1：平台背书签发/钱包验签；canonicalString JSON 序列化）
-mcp-server（薄壳，无密钥：4 工具 + 双闸门接线）
+mcp-server（薄壳，无密钥：6 工具 + 双闸门接线）
 ```
 
 ### 凭证隔离（本仓库最核心的安全架构，勿破坏）
@@ -78,8 +78,12 @@ mcp-server（薄壳，无密钥：4 工具 + 双闸门接线）
 ```
 metadata.json       明文 { address }（地址非秘密）
 device-share.json   片①，口令加密（scrypt KEK + AES-GCM，0600）
-recovery-codes.txt  片②+③ 明文恢复码（用户自持责任，0600）
+recovery-codes.txt  片②（+片③，仅邮箱未送达时）明文恢复码（0600，用户自持责任）
+mnemonic.txt        （可选）24 词助记词 = 完整私钥备份（单点，0600）
 unlock/             令牌会话：unlock-*.bin / passphrase-*.bin / consuming-*.bin
+
+⚠️ 安全删除：wipe 双模式（saved=仅删明文备份，钱包保留 / all=全删），
+覆写 3 遍 + 确认短语「PERMANENT DELETE」；MCP 文件路径参数必须位于钱包目录内。
 ```
 
 ### 签名流程（双闸门）

@@ -10,14 +10,37 @@
  *   SHARDNEST_PLATFORM_ADDRESS  期望的平台背书地址（必填，验签用）
  *   SHARDNEST_HOME              钱包目录（默认 ~/.shardnest）
  */
+import * as path from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { verifySignedRequest, type SignedRequest } from '@wallet-service/protocol'
-import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile, restoreFromMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, type WipeScope } from '@wallet-service/cli'
+import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile, restoreFromMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getHomeDir, type WipeScope } from '@wallet-service/cli'
 import { defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession, consumePassphraseSession } from '@wallet-service/signer'
 
 export const PLATFORM_ADDRESS = process.env.SHARDNEST_PLATFORM_ADDRESS ?? ''
+
+/** 路径约束：文件路径必须在钱包目录内（防穿越/符号链接逃逸到任意文件） */
+async function assertSafePath(userPath: string): Promise<string> {
+  const home = path.resolve(getHomeDir())
+  const resolved = path.resolve(userPath)
+  if (resolved !== home && !resolved.startsWith(home + path.sep)) {
+    throw new Error('文件路径必须在钱包目录内')
+  }
+  try {
+    const exists = await Bun.file(resolved).exists()
+    if (exists) {
+      const real = await (await import('node:fs/promises')).realpath(resolved)
+      if (real !== home && !real.startsWith(home + path.sep)) {
+        throw new Error('文件路径经过符号链接逃逸出钱包目录')
+      }
+    }
+  } catch (err) {
+    if ((err as Error).message.includes('钱包目录')) throw err
+    // realpath 失败（文件不存在）时按 resolve 结果放行（后续 readFile 会 ENOENT）
+  }
+  return resolved
+}
 
 export function createShardnestServer(
   approval: ApprovalHandler = defaultApproval,
@@ -67,6 +90,14 @@ export function createShardnestServer(
       // 助记词内容只写本地文件（0600），响应仅含文件路径
     },
     async () => {
+      // 闸门：导出完整私钥（单点）——必须用户确认
+      const approved = await approval({
+        action: 'mnemonic_export',
+        display: '⚠️ 导出 24 词助记词（=完整私钥，单点）：将完整私钥写入本地文件',
+      })
+      if (!approved) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'USER_REJECTED' }) }] }
+      }
       // 本地钱包必须存在（地址校验基准）
       let localAddress: string
       try {
@@ -101,6 +132,13 @@ export function createShardnestServer(
           }],
         }
       } catch (err) {
+        const e = err as NodeJS.ErrnoException
+        if (e.code === 'ENOENT') {
+          return { content: [{ type: 'text' as const, text: JSON.stringify({
+            error: 'NO_RECOVERY_FILE',
+            message: '本地恢复码文件不存在（可能已 wipe）：请用 CLI `shardnest mnemonic-export`（设备片+恢复码模式）导出，或提供含恢复码的文件路径',
+          }) }] }
+        }
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'EXPORT_FAILED', message: (err as Error).message }) }] }
       }
     },
@@ -225,11 +263,13 @@ export function createShardnestServer(
         // 二选一：助记词文件（单份完整恢复）或恢复码文件（2-of-3 恢复）
         let result: Awaited<ReturnType<typeof restoreWallet>>
         if (mnemonic_file_path) {
-          const mnemonic = (await Bun.file(mnemonic_file_path).text())
+          const safeMnemonicPath = await assertSafePath(mnemonic_file_path)
+          const mnemonic = (await Bun.file(safeMnemonicPath).text())
             .split('\n').find((l) => l.trim().split(/\s+/).length >= 24)?.trim() ?? ''
           result = await restoreFromMnemonic(passphrase, mnemonic, expected_address, email)
         } else {
-          const codes = await readRecoveryCodesFromFile(recovery_file_path)
+          const safePath = recovery_file_path ? await assertSafePath(recovery_file_path) : undefined
+          const codes = await readRecoveryCodesFromFile(safePath)
           if (codes.length < 2) {
             return { content: [{ type: 'text' as const, text: JSON.stringify({
               error: 'NEED_SECOND_RECOVERY_CODE',

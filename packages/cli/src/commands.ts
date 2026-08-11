@@ -21,7 +21,7 @@ import {
 } from '@wallet-service/core'
 import { gcm } from '@noble/ciphers/aes'
 import { sendBackupShare } from './mailer'
-import { createUnlockSession } from '@wallet-service/signer'
+import { createUnlockSession, getUnlockDir } from '@wallet-service/signer'
 import { randomBytes } from '@noble/hashes/utils'
 import { privateKeyToMnemonic, mnemonicToPrivateKey } from '@wallet-service/core'
 
@@ -191,11 +191,18 @@ async function createWalletFromPrivateKey(
     mnemonicFileWritten = await saveMnemonic(privateKeyToMnemonic(privateKey))
   }
 
-  // 3. 原子落盘
-  await fs.mkdir(getHomeDir(), { recursive: true })
-  await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
-  await fs.writeFile(deviceFile(), JSON.stringify({ version: 1, share: enc }, null, 2), { mode: 0o600 })
-  privateKey.fill(0)
+  // 3. 原子落盘 + 回滚（meta 成功 device 失败 → 清理 meta 不留半成品）
+  try {
+    await fs.mkdir(getHomeDir(), { recursive: true })
+    await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
+    await fs.writeFile(deviceFile(), JSON.stringify({ version: 1, share: enc }, null, 2), { mode: 0o600 })
+  } catch (err) {
+    await fs.rm(metaFile(), { force: true })
+    await fs.rm(deviceFile(), { force: true })
+    throw err
+  } finally {
+    privateKey.fill(0) // 所有路径（成功/异常）均清零
+  }
 
   return {
     address,
@@ -204,7 +211,9 @@ async function createWalletFromPrivateKey(
     backupStatus,
     recoveryFile: recoveryFileWritten,
     mnemonicFile: mnemonicFileWritten,
-    note: mnemonic ? '助记词已生成（=完整私钥，单点）：请抄写并安全保管，勿拍照/截图/网络传输' : undefined,
+    note: mnemonic
+      ? '助记词已生成（=完整私钥，单点）：请抄写并安全保管，勿拍照/截图/网络传输；建议抄写离线保存后执行 wipe 删除本机明文备份'
+      : undefined,
   }
 }
 
@@ -217,18 +226,23 @@ export async function restoreFromMnemonic(
 ): Promise<InitResult> {
   validatePassphrase(passphrase)
   const privateKey = mnemonicToPrivateKey(mnemonic)
-  const { privateKeyToAddress } = await import('@wallet-service/core')
-  const address = privateKeyToAddress(privateKey)
+  try {
+    const { privateKeyToAddress } = await import('@wallet-service/core')
+    const address = privateKeyToAddress(privateKey)
 
-  const want = expectedAddress ?? (await readOldAddress())
-  if (want && want.toLowerCase() !== address.toLowerCase()) {
-    privateKey.fill(0)
-    throw new Error(`助记词恢复出的地址 (${address}) 与目标地址 (${want}) 不一致——助记词可能抄错，操作已中止`)
+    const want = expectedAddress ?? (await readOldAddress())
+    if (want && want.toLowerCase() !== address.toLowerCase()) {
+      throw new Error(`助记词恢复出的地址 (${address}) 与目标地址 (${want}) 不一致——助记词可能抄错，操作已中止`)
+    }
+
+    const result = await createWalletFromPrivateKey(passphrase, privateKey, email, false)
+    return {
+      ...result,
+      note: '已从助记词重建分片体系（2-of-3）；⚠️ 请妥善保存新恢复码；旧恢复码/旧邮箱备份片仍可重组同一私钥——请作废销毁并删除旧邮件；原助记词仍可恢复（单点，建议销毁或严格保管）',
+    }
+  } finally {
+    privateKey.fill(0) // 所有路径（成功/异常）均清零
   }
-
-  const result = await createWalletFromPrivateKey(passphrase, privateKey, email, false)
-  privateKey.fill(0)
-  return { ...result, note: '已从助记词重建分片体系（2-of-3）；请妥善保存新恢复码，原助记词仍可恢复（单点，建议销毁或严格保管）' }
 }
 
 /** 显示地址（无需口令） */
@@ -401,24 +415,33 @@ export const WIPE_CONFIRM_PHRASE = 'PERMANENT DELETE'
  * SSD 闪存级残余需取证设备才能读取，普通威胁模型下不可恢复。
  */
 async function secureDelete(file: string): Promise<void> {
+  let overwritten = false
   try {
     const stat = await fs.stat(file)
     if (stat.size > 0) {
       const fh = await fs.open(file, 'r+')
-      const chunk = randomBytes(Math.min(stat.size, 64 * 1024))
-      for (let pass = 0; pass < 3; pass++) {
-        let written = 0
-        while (written < stat.size) {
-          const n = await fh.write(chunk, 0, Math.min(chunk.length, stat.size - written), written)
-          written += n
+      try {
+        for (let pass = 0; pass < 3; pass++) {
+          let written = 0
+          while (written < stat.size) {
+            // 每个位置生成新随机块（防模式可预测）+ 分块防大文件内存
+            const chunk = randomBytes(Math.min(64 * 1024, stat.size - written))
+            const n = await fh.write(chunk, 0, chunk.length, written)
+            written += n
+          }
         }
+        await fh.sync().catch(() => {})
+        overwritten = true
+      } finally {
+        await fh.close().catch(() => {}) // 保证句柄释放
       }
-      await fh.close()
     }
-  } catch {
-    // 文件不存在或不可写：跳过覆写，直接删除
+  } catch (err) {
+    // 覆写失败不静默——提示后仍删除（调用方知情，避免虚假的'安全删除'印象）
+    console.warn(`覆写失败 ${file}: ${(err as Error).message}，仅执行普通删除`)
   }
   await fs.rm(file, { force: true })
+  void overwritten
 }
 
 /** wipe 范围：all=本机全部密钥材料 / saved=仅'需用户保存'的明文备份（恢复码+助记词） */
