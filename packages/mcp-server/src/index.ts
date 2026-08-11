@@ -14,7 +14,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { verifySignedRequest, type SignedRequest } from '@wallet-service/protocol'
-import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile, restoreFromMnemonic } from '@wallet-service/cli'
+import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile, restoreFromMnemonic, exportMnemonicFromCodes } from '@wallet-service/cli'
 import { defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession, consumePassphraseSession } from '@wallet-service/signer'
 
 export const PLATFORM_ADDRESS = process.env.SHARDNEST_PLATFORM_ADDRESS ?? ''
@@ -56,6 +56,46 @@ export function createShardnestServer(
             warning: '恢复码已写入本地文件，请立即查看并妥善保存；如生成助记词，助记词=完整私钥（单点），请抄写后安全保管',
           }),
         }],
+      }
+    },
+  )
+
+  server.tool(
+    'wallet_mnemonic_export',
+    {
+      // 无敏感参数：导出走本地恢复码文件（2 片）+ 地址交叉校验；
+      // 助记词内容只写本地文件（0600），响应仅含文件路径
+    },
+    async () => {
+      // 本地钱包必须存在（地址校验基准）
+      let localAddress: string
+      try {
+        localAddress = await getAddress()
+      } catch {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'NO_WALLET' }) }] }
+      }
+      // 消费解锁令牌 → 组合私钥已在令牌会话中；导出助记词需要重新组合——改用恢复码文件
+      // 简化：解锁令牌不承载组合私钥导出能力，助记词导出走「恢复码文件 + 本地解锁」的
+      // 专用路径：读取本地恢复码文件（2 片）→ 组合 → 导出（地址交叉校验兜底）
+      try {
+        const codes = await readRecoveryCodesFromFile()
+        const result = await exportMnemonicFromCodes(codes[0], codes[1])
+        if (result.address.toLowerCase() !== localAddress.toLowerCase()) {
+          return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'ADDRESS_MISMATCH' }) }] }
+        }
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              address: result.address,
+              // ⚠️ 助记词=完整私钥（单点）：只返回文件路径，内容不进 LLM
+              mnemonic_file: result.mnemonicFile,
+              warning: '助记词 = 完整私钥（单点），请抄写后安全保管；泄露即资金丢失',
+            }),
+          }],
+        }
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'EXPORT_FAILED', message: (err as Error).message }) }] }
       }
     },
   )

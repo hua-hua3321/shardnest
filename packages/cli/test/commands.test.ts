@@ -10,6 +10,8 @@ import {
   encodeRecoveryCode,
   decodeRecoveryCode,
   restoreFromMnemonic,
+  exportMnemonic,
+  exportMnemonicFromCodes,
 } from '../src/commands'
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
@@ -127,6 +129,32 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     const mnemonic = fileContent.split('\n').find((l) => l.trim().split(/\s+/).length === 24)!.trim()
     await expect(
       restoreFromMnemonic(PASSPHRASE, mnemonic, '0x0000000000000000000000000000000000000000'),
+    ).rejects.toThrow(/不一致/)
+  })
+
+  it('2/3 导出助记词：init 未生成 → 任意 2 片导出 → 单独恢复同一地址', async () => {
+    // 1. 初始未生成助记词
+    const plain = await initWallet(PASSPHRASE)
+    expect(plain.mnemonicFile).toBeUndefined()
+    // 2. 模式 B：2 个恢复码导出
+    const exported = await exportMnemonicFromCodes(plain.recoveryCodes[0], plain.recoveryCodes[1])
+    expect(exported.address).toBe(plain.address)
+    const fileContent = await fs.readFile(exported.mnemonicFile, 'utf8')
+    const mnemonic = fileContent.split('\n').find((l) => l.trim().split(/\s+/).length === 24)!.trim()
+    expect(mnemonic.split(' ').length).toBe(24)
+    // 3. 模式 A：设备片 + 1 恢复码导出 → 同一助记词（同一私钥）
+    const exportedA = await exportMnemonic(PASSPHRASE, plain.recoveryCodes[0])
+    expect(exportedA.address).toBe(plain.address)
+    // 4. 导出的助记词可单独恢复同一地址
+    const restored = await restoreFromMnemonic(PASSPHRASE, mnemonic, plain.address)
+    expect(restored.address).toBe(plain.address)
+  })
+
+  it('导出助记词：错误恢复码 → 地址不一致拒绝', async () => {
+    const a = await initWallet(PASSPHRASE)
+    const b = await initWallet(PASSPHRASE)
+    await expect(
+      exportMnemonicFromCodes(a.recoveryCodes[0], b.recoveryCodes[1]),
     ).rejects.toThrow(/不一致/)
   })
 

@@ -13,5 +13,7 @@ export {
   validatePassphrase,
   readRecoveryCodesFromFile,
   restoreFromMnemonic,
+  exportMnemonic,
+  exportMnemonicFromCodes,
   type InitResult,
 } from './commands'

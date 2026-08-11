@@ -44,11 +44,17 @@ async function connect(approval?: (req: { action: string; display: string }) => 
 }
 
 describe('shardnest MCP 薄壳', () => {
-  it('注册 4 个工具', async () => {
+  it('注册 5 个工具', async () => {
     const client = await connect()
     const tools = await client.listTools()
     const names = tools.tools.map((t) => t.name).sort()
-    expect(names).toEqual(['signed_request_sign', 'wallet_address', 'wallet_create', 'wallet_restore'])
+    expect(names).toEqual([
+      'signed_request_sign',
+      'wallet_address',
+      'wallet_create',
+      'wallet_mnemonic_export',
+      'wallet_restore',
+    ])
   })
 
   it('wallet_create → 返回地址 + 恢复码', async () => {
@@ -73,6 +79,19 @@ describe('shardnest MCP 薄壳', () => {
     const fileContent = await fs.readFile(data.mnemonic_file, 'utf8')
     const mnemonic = fileContent.split('\n').find((l) => l.trim().split(/\s+/).length === 24)!.trim()
     expect(mnemonic.split(' ').length).toBe(24)
+  })
+
+  it('wallet_mnemonic_export：本地恢复码文件导出助记词 → 只返回文件路径（不经 LLM）', async () => {
+    const client = await connect()
+    await createWallet(client, PASSPHRASE) // 默认不生成助记词
+    const res = await client.callTool({ name: 'wallet_mnemonic_export', arguments: {} })
+    const out = JSON.parse((res.content[0] as { text: string }).text)
+    expect(out.mnemonic_file).toBeTruthy()
+    expect(out.mnemonic).toBeUndefined()
+    const fileContent = await fs.readFile(out.mnemonic_file, 'utf8')
+    const mnemonic = fileContent.split('\n').find((l) => l.trim().split(/\s+/).length === 24)!.trim()
+    expect(mnemonic.split(' ').length).toBe(24)
+    expect(out.warning).toContain('单点')
   })
 
   it('wallet_create 默认不生成助记词', async () => {

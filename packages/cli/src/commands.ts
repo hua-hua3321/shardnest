@@ -315,6 +315,48 @@ export async function readRecoveryCodesFromFile(filePath?: string): Promise<stri
   return codes
 }
 
+/** 导出 24 词助记词（模式 A：设备片 + 1 恢复码）——任意 2 片即可随时导出
+ * ⚠️ 助记词=完整私钥（单点），导出前必须提示风险
+ */
+export async function exportMnemonic(passphrase: string, recoveryCode: string): Promise<{ mnemonicFile: string; address: string }> {
+  const enc = JSON.parse(await fs.readFile(deviceFile(), 'utf8')) as { share: { data: string; salt: string } }
+  const share1 = await decryptShare(enc.share, passphrase)
+  const share2 = decodeRecoveryCode(recoveryCode)
+  return exportMnemonicFromShares([share1, share2])
+}
+
+/** 导出 24 词助记词（模式 B：2 个恢复码，无设备场景） */
+export async function exportMnemonicFromCodes(recoveryCode1: string, recoveryCode2: string): Promise<{ mnemonicFile: string; address: string }> {
+  return exportMnemonicFromShares([decodeRecoveryCode(recoveryCode1), decodeRecoveryCode(recoveryCode2)])
+}
+
+/** 共享实现：组合私钥 → 助记词落盘；地址与本地 metadata 交叉校验防错组合 */
+async function exportMnemonicFromShares(shares: Share[]): Promise<{ mnemonicFile: string; address: string }> {
+  const { WalletVault } = await import('@wallet-service/signer')
+  const vault = new WalletVault()
+  let mnemonicFile: string
+  let address: string
+  try {
+    vault.unlock(shares) // 私钥范围校验（0<priv<n），防静默坏组合
+    address = vault.getAddress()
+    const want = await readOldAddress()
+    if (want && want.toLowerCase() !== address.toLowerCase()) {
+      throw new Error(`组合出的地址 (${address}) 与本地钱包 (${want}) 不一致——恢复码可能输错，操作已中止`)
+    }
+    // 私钥已解锁但 WalletVault 不暴露私钥——用组合路径再拿一次（组合后立即清零）
+    const privateKey = combineShares(shares)
+    try {
+      mnemonicFile = await saveMnemonic(privateKeyToMnemonic(privateKey))
+    } finally {
+      privateKey.fill(0)
+    }
+  } finally {
+    vault.wipe()
+    for (const s of shares) s.bytes.fill(0)
+  }
+  return { mnemonicFile, address }
+}
+
 /** 创建解锁令牌：本地口令+恢复码 → 组合私钥 → 短期单次解锁会话（P0-1） */
 export async function createUnlockToken(passphrase: string, recoveryCode: string): Promise<string> {
   const enc = JSON.parse(await fs.readFile(deviceFile(), 'utf8')) as { share: { data: string; salt: string } }

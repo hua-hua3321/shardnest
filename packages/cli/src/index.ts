@@ -9,7 +9,7 @@
  *   shardnest restore     # 输入 2 个恢复码恢复（新设备/口令丢失）
  */
 import * as readline from 'node:readline'
-import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic } from './commands'
+import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes } from './commands'
 import { createPassphraseSession } from '@wallet-service/signer'
 
 async function prompt(question: string): Promise<string> {
@@ -88,6 +88,25 @@ async function main() {
       console.log(await signMessage(passphrase, code, args.join(' ')))
       break
     }
+    case 'mnemonic-export': {
+      console.log('⚠️  导出的 24 词助记词 = 完整私钥（单点）：泄露即资金丢失，请离线严格保管')
+      console.log('    选择分片来源：')
+      const mode = (await prompt('a) 设备片+恢复码（需口令）  b) 两个恢复码  [a/b]: ')).toLowerCase()
+      let result: { mnemonicFile: string; address: string }
+      if (mode === 'b') {
+        const c1 = await promptSecret('恢复码 1（掩码输入）: ')
+        const c2 = await promptSecret('恢复码 2（掩码输入）: ')
+        result = await exportMnemonicFromCodes(c1, c2)
+      } else {
+        const passphrase = await promptSecret('口令: ')
+        const code = await promptSecret('恢复码（掩码输入）: ')
+        result = await exportMnemonic(passphrase, code)
+      }
+      console.log('\n✅ 助记词已导出')
+      console.log(`地址: ${result.address}（与本地钱包一致校验通过）`)
+      console.log(`助记词文件: ${result.mnemonicFile}（24 词，请抄写后安全保管）`)
+      break
+    }
     case 'restore-mnemonic': {
       const passphrase = await promptSecret('设置新口令（>=12 位）: ')
       console.log('请输入 24 词助记词（以空格分隔）:')
@@ -123,7 +142,7 @@ async function main() {
       break
     }
     default:
-      console.log('用法: shardnest [init|address|passphrase-token|unlock|sign|restore|restore-mnemonic]')
+      console.log('用法: shardnest [init|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export]')
   }
 }
 
