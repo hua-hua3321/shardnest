@@ -199,11 +199,14 @@ async function createWalletFromPrivateKey(
   } catch (err) {
     await fs.rm(metaFile(), { force: true })
     await fs.rm(deviceFile(), { force: true })
+    // 失败回滚用普通删除而非 secureDelete：文件刚写入未持久化，且
+    // secureDelete 在 APFS/SSD（CoW）上同样无法保证物理抹除——普通删除足够
     await fs.rm(recoveryFileWritten, { force: true }) // 明文恢复码（2 片=私钥）
     if (mnemonicFileWritten) await fs.rm(mnemonicFileWritten, { force: true }) // 助记词=完整私钥
     throw err
   } finally {
     privateKey.fill(0) // 所有路径（成功/异常）均清零
+    for (const s of shares) s.bytes.fill(0) // 不变式 5：明文分片一并清零（任意 2 片=私钥）
   }
 
   return {
@@ -327,6 +330,7 @@ export async function restoreWallet(
     throw err
   } finally {
     privateKey.fill(0)
+    for (const s of [...shares, ...fresh]) s.bytes.fill(0) // 不变式 5：输入 2 片 + 新 3 片一并清零
   }
 
   return {

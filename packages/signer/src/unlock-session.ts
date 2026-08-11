@@ -24,6 +24,36 @@ export function getUnlockDir(): string {
   return path.join(process.env.SHARDNEST_HOME ?? path.join(process.env.HOME ?? '.', '.shardnest'), 'unlock')
 }
 
+/**
+ * 清理过期会话文件（I6）：unlock/passphrase 令牌生成后未消费的 .bin 会永久
+ * 堆积——MCP server 启动时调用。文件 AES-GCM 加密（不可爆破），清理目的为
+ * 防堆积占空间 + 减少「此机有钱包且曾解锁」的文件名侧信道。
+ */
+export async function cleanupExpiredUnlockSessions(): Promise<number> {
+  let removed = 0
+  try {
+    const dir = getUnlockDir()
+    const names = await fs.readdir(dir)
+    const now = Date.now()
+    for (const name of names) {
+      if (!name.endsWith('.bin')) continue
+      const file = path.join(dir, name)
+      try {
+        const st = await fs.stat(file)
+        if (now - st.mtimeMs > UNLOCK_TTL_MS) {
+          await fs.rm(file, { force: true })
+          removed++
+        }
+      } catch {
+        // 单个文件异常不影响整体清理
+      }
+    }
+  } catch {
+    // 目录不存在等——无需清理
+  }
+  return removed
+}
+
 /** 会话类型：unlock=私钥解锁 / passphrase=创建或恢复口令（均单次 + TTL） */
 export type SessionType = 'unlock' | 'passphrase'
 

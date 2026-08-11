@@ -164,6 +164,10 @@ export function combineShares(parts: Share[]): Uint8Array {
  * 因此 reshare 必须配合「旧载体物理清理」（旧设备清除/旧邮件删除/旧备份作废）。
  */
 export function reshareShares(parts: Share[], options: { shares: number; threshold: number; rng?: () => number }): Share[] {
-  const secret = combineShares(parts)
-  return splitSecret(secret, options)
+  const secret = combineShares(parts) // 组合出的 secret = 明文私钥
+  try {
+    return splitSecret(secret, options)
+  } finally {
+    secret.fill(0) // 不变式 5：中间私钥任何路径均清零
+  }
 }

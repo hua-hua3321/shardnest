@@ -16,7 +16,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { verifySignedRequest, type SignedRequest } from '@wallet-service/protocol'
 import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile, restoreFromMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getHomeDir, type WipeScope } from '@wallet-service/cli'
-import { defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession, consumePassphraseSession } from '@wallet-service/signer'
+import {defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession, consumePassphraseSession, cleanupExpiredUnlockSessions} from '@wallet-service/signer'
 
 export const PLATFORM_ADDRESS = process.env.SHARDNEST_PLATFORM_ADDRESS ?? ''
 
@@ -47,6 +47,9 @@ export function createShardnestServer(
   platformAddress: string = PLATFORM_ADDRESS,
 ) {
   const server = new McpServer({ name: 'shardnest', version: '0.3.0' })
+
+  // I6: 清理过期未消费的令牌会话（防堆积 + 减少侧信道）
+  void cleanupExpiredUnlockSessions()
 
   // @ts-expect-error TS2589: sdk 1.x registerTool 泛型+zod 推导深度超限（运行时无影响）
   server.tool(
