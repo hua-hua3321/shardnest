@@ -58,6 +58,77 @@ Sensitive credentials are never tool arguments — use `passphrase_token` / `rec
 
 Email backup (optional): `SHARDNEST_SMTP_HOST / PORT / USER / PASS / FROM / TLS`.
 
+## CLI reference
+
+All commands are interactive (passphrases & recovery codes are masked input).
+
+| Command | Purpose | Key prompts / output |
+|---------|---------|----------------------|
+| `init` | Create wallet | masked passphrase → email (optional, sends share ③) → generate 24-word mnemonic? (default No) → prints recovery codes, saves files under `~/.shardnest/` |
+| `address` | Show address | none (no secret needed) |
+| `passphrase-token` | Generate passphrase token for MCP create/restore | masked passphrase → prints token (5 min, single-use, keep out of chats) |
+| `unlock` | Generate unlock token for MCP signing | masked passphrase + recovery code → prints token |
+| `sign <message>` | EIP-191 personal sign | masked passphrase + recovery code → `{address, signature}` |
+| `restore` | Recover from 2 recovery codes | new masked passphrase → 2 masked recovery codes → expected address (optional, strongly recommended) → email (optional) |
+| `restore-mnemonic` | Recover from 24-word mnemonic alone | new masked passphrase → 24 words → expected address (optional) → email (optional) |
+| `mnemonic-export` | Export 24-word mnemonic from any 2 shares | mode a) device share + recovery code, or b) two recovery codes → writes `mnemonic.txt` |
+| `wipe` | Permanently delete (irreversible) | choose scope: 1) saved files only, 2) everything → file list → confirm phrase `PERMANENT DELETE` |
+
+### Mnemonic (optional, default off)
+
+- Only **24 words** are supported: 12 words carry 128 bits < 256-bit private key (capacity constraint).
+- A mnemonic **equals the full private key (single point)** — leak = funds lost, no threshold protection. Store offline (paper/password manager), then run `wipe` (scope 1) to remove the local plaintext copy.
+- Generated on `init` (opt-in) or exported anytime via `mnemonic-export` (any 2 of 3 shares); recovered via `restore-mnemonic`.
+
+### Email backup (optional)
+
+| Env var | Meaning |
+|---------|---------|
+| `SHARDNEST_SMTP_HOST` | SMTP server (required to enable) |
+| `SHARDNEST_SMTP_PORT` / `TLS` | default 465 / true |
+| `SHARDNEST_SMTP_USER` / `PASS` / `FROM` | credentials / sender (default USER) |
+
+Backup distribution after init:
+- **Email delivered** → local `recovery-codes.txt` holds only share ② (share ③ lives in the mailbox) — a full local compromise cannot move funds.
+- **No email** → both shares ②③ stay local with a prominent warning; move one share offline or configure email.
+
+### wipe — two scopes
+
+| Scope | Deletes | Wallet after |
+|-------|---------|-------------|
+| 1) saved (default/recommended) | recovery codes + mnemonic (plaintext backups) | still usable (passphrase unlock) |
+| 2) all | device share + backups + metadata + token sessions | must rebuild from saved codes/mnemonic |
+
+Both scopes overwrite files 3× with random data before unlink (irreversible) and require the confirm phrase `PERMANENT DELETE`.
+
+## MCP tools
+
+Start the server:
+
+```bash
+SHARDNEST_PLATFORM_ADDRESS=<platform endorsement address> SHARDNEST_HOME=~/.shardnest \
+bun packages/mcp-server/src/index.ts
+```
+
+Sensitive credentials never appear in tool arguments — they travel via local token files / file paths (LLM-isolated).
+
+| Tool | Arguments | Notes |
+|------|-----------|-------|
+| `wallet_create` | `passphrase_token`, `email?`, `generate_mnemonic?` | returns `recovery_codes_file` / `mnemonic_file` paths (no plaintext to LLM) |
+| `wallet_address` | — | current address |
+| `wallet_mnemonic_export` | — | approval-gated; writes 24-word mnemonic to local file, returns path only |
+| `signed_request_sign` | `signed_request`, `unlock_token` | double-gated (platform endorsement + user approval); signs `action:intent_hash` |
+| `wallet_restore` | `recovery_file_path?` / `mnemonic_file_path?`, `passphrase_token`, `expected_address?`, `email?` | file paths must be inside the wallet dir |
+| `wallet_wipe` | `scope?` (`saved` default / `all`) | approval-gated; returns removed file list |
+
+## Platform integration (any business platform)
+
+1. **Issue**: platform signs a `signed_request` with its own private key (`@wallet-service/protocol` `issueSignedRequest`).
+2. **Sign**: user's Agent calls MCP `signed_request_sign` — endorsement verified, `wallet_address` checked, user confirms, local token consumed, EIP-191 signature returned.
+3. **Verify**: platform runs `@wallet-service/verify-sdk` `recoverSigner(message, sig)` → recovered address must match the bound `wallet_address`.
+
+See [protocol/README.md](protocol/README.md) for the `signed_request` v1 spec & JSON Schema.
+
 ## Architecture
 
 ```

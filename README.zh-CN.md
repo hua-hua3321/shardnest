@@ -45,18 +45,76 @@ mnemonic.txt          （可选）24 词助记词 = 完整私钥备份（单点�
 - **签名**：平台用自持私钥签发 `signed_request` 背书 → MCP 验背书、校验 `wallet_address`、用户确认（双闸门）→ 消费本地解锁令牌 → 内存签名 → 清零。
 - **恢复**：任意 2 片重组同一私钥。`restore` 会用派生地址与期望地址/旧 metadata 交叉校验，拒绝输错的恢复码。
 
-## MCP server
+## CLI 命令参考
+
+所有命令均为交互式（口令与恢复码掩码输入）。
+
+| 命令 | 用途 | 关键交互 / 输出 |
+|------|------|----------------|
+| `init` | 创建钱包 | 掩码口令 → 邮箱（可选，发送片③）→ 是否生成 24 词助记词（默认否）→ 打印恢复码，落盘 `~/.shardnest/` |
+| `address` | 显示地址 | 无（无需秘密） |
+| `passphrase-token` | 生成口令令牌（MCP 创建/恢复用） | 掩码口令 → 输出令牌（5 分钟/单次，勿在聊天中转发） |
+| `unlock` | 生成解锁令牌（MCP 签名用） | 掩码口令 + 恢复码 → 输出令牌 |
+| `sign <消息>` | EIP-191 个人签名 | 掩码口令 + 恢复码 → `{address, signature}` |
+| `restore` | 用 2 个恢复码恢复 | 新掩码口令 → 2 个掩码恢复码 → 期望地址（可选，强烈建议）→ 邮箱（可选） |
+| `restore-mnemonic` | 24 词助记词单独恢复 | 新掩码口令 → 24 词 → 期望地址（可选）→ 邮箱（可选） |
+| `mnemonic-export` | 任意 2 片导出 24 词助记词 | 模式 a) 设备片+恢复码，或 b) 两个恢复码 → 写入 `mnemonic.txt` |
+| `wipe` | 彻底删除（不可恢复） | 选择范围：1) 仅需保存的备份文件 2) 全部 → 文件清单 → 确认短语 `PERMANENT DELETE` |
+
+### 助记词（可选，默认关闭）
+
+- **仅支持 24 词**：12 词仅 128 位 < 256 位私钥（容量约束）。
+- 助记词 **= 完整私钥（单点）**——泄露即资金丢失，无门限保护。请离线保管（纸/密码管理器），随后执行 `wipe`（范围 1）删除本机明文副本。
+- `init` 时可选生成，或随时用 `mnemonic-export`（任意 2 片）导出；用 `restore-mnemonic` 恢复。
+
+### 邮箱备份（可选）
+
+| 环境变量 | 说明 |
+|---------|------|
+| `SHARDNEST_SMTP_HOST` | SMTP 服务器（配置后启用） |
+| `SHARDNEST_SMTP_PORT` / `TLS` | 默认 465 / true |
+| `SHARDNEST_SMTP_USER` / `PASS` / `FROM` | 凭据 / 发件人（默认 USER） |
+
+创建后的备份分布：
+- **邮箱已送达** → 本地 `recovery-codes.txt` 仅存片②（片③在邮箱）——本机整体泄露无法动钱。
+- **未配邮箱** → 片②③均在本机本地文件（显著警告）；建议转移 1 片离线保存或配置邮箱。
+
+### wipe — 两种范围
+
+| 范围 | 删除内容 | 删除后钱包 |
+|------|---------|-----------|
+| 1) 仅需保存的备份（默认/推荐） | 恢复码 + 助记词（明文备份） | 仍可用（口令解锁） |
+| 2) 全部 | 设备片 + 备份 + metadata + 令牌会话 | 需用保存的恢复码/助记词重建 |
+
+两种范围均先随机覆写 3 遍再删除（不可恢复），且需输入确认短语 `PERMANENT DELETE`。
+
+## MCP 工具
+
+启动服务：
 
 ```bash
-SHARDNEST_PLATFORM_ADDRESS=<平台背书地址> \
-SHARDNEST_HOME=~/.shardnest \
+SHARDNEST_PLATFORM_ADDRESS=<平台背书地址> SHARDNEST_HOME=~/.shardnest \
 bun packages/mcp-server/src/index.ts
 ```
 
-工具：`wallet_create` · `wallet_address` · `signed_request_sign` · `wallet_restore`。
-敏感凭证永不作工具参数——一律使用 `passphrase_token` / `recovery_file_path` / `recovery_codes_file`。
+敏感凭证永不作工具参数——经本地令牌文件/文件路径通道（与 LLM 隔离）。
 
-邮箱备份（可选）：`SHARDNEST_SMTP_HOST / PORT / USER / PASS / FROM / TLS`。
+| 工具 | 参数 | 说明 |
+|------|------|------|
+| `wallet_create` | `passphrase_token`、`email?`、`generate_mnemonic?` | 返回 `recovery_codes_file` / `mnemonic_file` 路径（明文不进 LLM） |
+| `wallet_address` | — | 当前地址 |
+| `wallet_mnemonic_export` | — | 需确认闸门；24 词助记词写入本地文件，仅返回路径 |
+| `signed_request_sign` | `signed_request`、`unlock_token` | 双闸门（平台背书 + 用户确认）；签 `action:intent_hash` |
+| `wallet_restore` | `recovery_file_path?` / `mnemonic_file_path?`、`passphrase_token`、`expected_address?`、`email?` | 文件路径必须在钱包目录内 |
+| `wallet_wipe` | `scope?`（默认 `saved` / `all`） | 需确认闸门；返回删除文件清单 |
+
+## 业务平台接入（任意平台）
+
+1. **签发**：平台用自持私钥签发 `signed_request`（`@wallet-service/protocol` 的 `issueSignedRequest`）。
+2. **签名**：用户 Agent 调用 MCP `signed_request_sign`——验背书、校验 `wallet_address`、用户确认、消费本地令牌、返回 EIP-191 签名。
+3. **验签**：平台用 `@wallet-service/verify-sdk` 的 `recoverSigner(message, sig)` 还原地址，必须与绑定的 `wallet_address` 一致。
+
+`signed_request` v1 规范与 JSON Schema 见 [protocol/README.md](protocol/README.md)。
 
 ## 架构
 
