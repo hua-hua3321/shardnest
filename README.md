@@ -77,6 +77,7 @@ All commands are interactive (passphrases & recovery codes are masked input).
 ### Mnemonic (optional, default off)
 
 - Only **24 words** are supported: 12 words carry 128 bits < 256-bit private key (capacity constraint).
+- **shardnest-proprietary encoding** (private key used directly as BIP-39 entropy; NO standard seed→BIP-32 derivation) — these words are **NOT compatible with MetaMask / Ledger / Trust Wallet** (importing yields a different address). Use them only inside shardnest.
 - A mnemonic **equals the full private key (single point)** — leak = funds lost, no threshold protection. Store offline (paper/password manager), then run `wipe` (scope 1) to remove the local plaintext copy.
 - Generated on `init` (opt-in) or exported anytime via `mnemonic-export` (any 2 of 3 shares); recovered via `restore-mnemonic`.
 
@@ -87,6 +88,8 @@ All commands are interactive (passphrases & recovery codes are masked input).
 | `SHARDNEST_SMTP_HOST` | SMTP server (required to enable) |
 | `SHARDNEST_SMTP_PORT` / `TLS` | default 465 / true |
 | `SHARDNEST_SMTP_USER` / `PASS` / `FROM` | credentials / sender (default USER) |
+
+Recovery code integrity: CRC-256 (keccak256 first 4 bytes, 32-bit) — error-detection miss rate 1/2^32.
 
 Backup distribution after init:
 - **Email delivered** → local `recovery-codes.txt` holds only share ② (share ③ lives in the mailbox) — a full local compromise cannot move funds.

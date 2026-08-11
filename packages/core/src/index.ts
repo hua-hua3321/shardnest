@@ -12,6 +12,7 @@ export {
   privateKeyToAddress,
   toChecksumAddress,
   generateKeyPair,
-  deriveKEK,
+  deriveKEK, kdfParamsOf, SCRYPT_OPTS,
   type KeyPair,
+  type KdfParams,
 } from './keys'

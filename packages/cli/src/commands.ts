@@ -17,6 +17,8 @@ import {
   combineShares,
   reshareShares,
   deriveKEK,
+  kdfParamsOf,
+  type KdfParams,
   type Share,
 } from '@wallet-service/core'
 import { gcm } from '@noble/ciphers/aes'
@@ -94,9 +96,10 @@ import { keccak_256 } from '@noble/hashes/sha3'
  * crc = keccak(`${index}:${hex}`) 首字节——CRC 覆盖 index+hex，
  * 防手输/OCR 错误的同时杜绝「错误 index + 正确 hex」绕过（P1-B）
  */
+/** 编码恢复码（O3：CRC 32 位——keccak256 前 4 字节，漏检率 1/2^32；旧 8 位码 fail-safe） */
 export function encodeRecoveryCode(share: Share): string {
   const hex = Buffer.from(share.bytes).toString('hex')
-  const crc = keccak_256(new TextEncoder().encode(`${share.index}:${hex}`))[0].toString(16).padStart(2, '0')
+  const crc = Buffer.from(keccak_256(new TextEncoder().encode(`${share.index}:${hex}`)).slice(0, 4)).toString('hex')
   return `sn1-${share.index}-${hex}-${crc}`
 }
 
@@ -108,14 +111,17 @@ export function decodeRecoveryCode(code: string): Share {
   // index 必须为 [1,255] 整数（GF(256) x 坐标域）
   if (!Number.isInteger(index) || index < 1 || index > 255) throw new Error('恢复码 index 超出有效范围')
   if (!/^[0-9a-f]{2,128}$/.test(hex) || hex.length % 2 !== 0) throw new Error('恢复码 hex 格式无效')
-  const expectCrc = keccak_256(new TextEncoder().encode(`${index}:${hex}`))[0].toString(16).padStart(2, '0')
+  // O3: 32 位 CRC（旧 8 位码校验失败 → fail-safe，用户重新获取即可）
+  const expectCrc = Buffer.from(keccak_256(new TextEncoder().encode(`${index}:${hex}`)).slice(0, 4)).toString('hex')
   if (crc !== expectCrc) throw new Error('恢复码校验失败（可能抄错/损坏），请核对后重试')
   return { index, bytes: new Uint8Array(Buffer.from(hex, 'hex')) }
 }
 
-async function encryptShare(share: Share, passphrase: string): Promise<{ data: string; salt: string }> {
+/** 加密设备分片（O1：KDF 参数随密文持久化——未来 scrypt 升级不破坏旧钱包） */
+async function encryptShare(share: Share, passphrase: string): Promise<{ data: string; salt: string; kdf?: KdfParams }> {
   const salt = randomBytes(16)
-  const kek = await deriveKEK(passphrase, salt)
+  const kdf = kdfParamsOf() // 当前常量参数，持久化供解密
+  const kek = await deriveKEK(passphrase, salt, kdf)
   const nonce = randomBytes(12)
   const cipher = gcm(kek, nonce)
   const payload = new Uint8Array(1 + share.bytes.length)
@@ -125,12 +131,14 @@ async function encryptShare(share: Share, passphrase: string): Promise<{ data: s
   return {
     data: Buffer.from(nonce).toString('base64') + '.' + Buffer.from(ct).toString('base64'),
     salt: Buffer.from(salt).toString('base64'),
+    kdf, // O1: KDF 参数随密文持久化
   }
 }
 
-async function decryptShare(enc: { data: string; salt: string }, passphrase: string): Promise<Share> {
+/** 解密设备分片（v1 无 kdf 字段 → 用默认参数，兼容旧钱包） */
+async function decryptShare(enc: { data: string; salt: string; kdf?: KdfParams }, passphrase: string): Promise<Share> {
   const salt = Uint8Array.from(Buffer.from(enc.salt, 'base64'))
-  const kek = await deriveKEK(passphrase, salt)
+  const kek = await deriveKEK(passphrase, salt, enc.kdf)
   const [nonceB64, ctB64] = enc.data.split('.')
   const nonce = Uint8Array.from(Buffer.from(nonceB64, 'base64'))
   const ct = Uint8Array.from(Buffer.from(ctB64, 'base64'))
@@ -208,7 +216,7 @@ async function createWalletFromPrivateKey(
   try {
     await fs.mkdir(getHomeDir(), { recursive: true })
     await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
-    await fs.writeFile(deviceFile(), JSON.stringify({ version: 1, share: enc }, null, 2), { mode: 0o600 })
+    await fs.writeFile(deviceFile(), JSON.stringify({ version: 2, share: enc }, null, 2), { mode: 0o600 })
   } catch (err) {
     await fs.rm(metaFile(), { force: true })
     await fs.rm(deviceFile(), { force: true })
@@ -335,7 +343,7 @@ export async function restoreWallet(
   try {
     await fs.mkdir(getHomeDir(), { recursive: true })
     await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
-    await fs.writeFile(deviceFile(), JSON.stringify({ version: 1, share: enc }, null, 2), { mode: 0o600 })
+    await fs.writeFile(deviceFile(), JSON.stringify({ version: 2, share: enc }, null, 2), { mode: 0o600 })
   } catch (err) {
     await fs.rm(metaFile(), { force: true })
     await fs.rm(deviceFile(), { force: true })

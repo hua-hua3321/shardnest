@@ -13,7 +13,21 @@ import { bytesToHex } from '@noble/hashes/utils'
 const CURVE_ORDER = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141')
 
 /** KEK 派生参数（scrypt 高成本防暴力破解；2^16=64MB 内存，兼顾 Web 端） */
-const SCRYPT_OPTS = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 }
+/** scrypt 默认参数（本地单用户 CLI/MCP；O1 起随密文持久化，可平滑升级） */
+export const SCRYPT_OPTS = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 } as const
+
+/** 持久化到密文的 KDF 元数据（RFC 8018 / age / 1Password 同款实践） */
+export interface KdfParams {
+  alg: 'scrypt'
+  N: number
+  r: number
+  p: number
+  dkLen: number
+}
+
+export function kdfParamsOf(opts?: Partial<KdfParams>): KdfParams {
+  return { alg: 'scrypt', N: opts?.N ?? SCRYPT_OPTS.N, r: opts?.r ?? SCRYPT_OPTS.r, p: opts?.p ?? SCRYPT_OPTS.p, dkLen: opts?.dkLen ?? SCRYPT_OPTS.dkLen }
+}
 
 export interface KeyPair {
   privateKey: Uint8Array
@@ -78,7 +92,8 @@ export function generateKeyPair(): KeyPair {
  * 口令派生 KEK（用于加密分片）——口令只在这里被使用，
  * 不参与私钥本身；scrypt 高成本参数防暴力破解。
  */
-export async function deriveKEK(passphrase: string, salt: Uint8Array): Promise<Uint8Array> {
+/** 派生 KEK：参数可注入（O1——解密时使用密文中持久化的 KDF 参数，而非当前常量） */
+export async function deriveKEK(passphrase: string, salt: Uint8Array, opts?: Partial<KdfParams>): Promise<Uint8Array> {
   const password = new TextEncoder().encode(passphrase)
-  return scryptAsync(password, salt, SCRYPT_OPTS)
+  return scryptAsync(password, salt, kdfParamsOf(opts))
 }

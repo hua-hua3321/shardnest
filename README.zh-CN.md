@@ -64,6 +64,7 @@ mnemonic.txt          （可选）24 词助记词 = 完整私钥备份（单点�
 ### 助记词（可选，默认关闭）
 
 - **仅支持 24 词**：12 词仅 128 位 < 256 位私钥（容量约束）。
+- **shardnest 专用编码**（私钥直接作 BIP-39 熵，不走标准 seed→BIP-32 派生）——**不兼容 MetaMask / Ledger / Trust Wallet 等主流钱包**（导入会得到不同地址），仅限 shardnest 内部使用。
 - 助记词 **= 完整私钥（单点）**——泄露即资金丢失，无门限保护。请离线保管（纸/密码管理器），随后执行 `wipe`（范围 1）删除本机明文副本。
 - `init` 时可选生成，或随时用 `mnemonic-export`（任意 2 片）导出；用 `restore-mnemonic` 恢复。
 
@@ -74,6 +75,8 @@ mnemonic.txt          （可选）24 词助记词 = 完整私钥备份（单点�
 | `SHARDNEST_SMTP_HOST` | SMTP 服务器（配置后启用） |
 | `SHARDNEST_SMTP_PORT` / `TLS` | 默认 465 / true |
 | `SHARDNEST_SMTP_USER` / `PASS` / `FROM` | 凭据 / 发件人（默认 USER） |
+
+恢复码完整性：32 位 CRC（keccak256 前 4 字节）——错误漏检率 1/2^32。
 
 创建后的备份分布：
 - **邮箱已送达** → 本地 `recovery-codes.txt` 仅存片②（片③在邮箱）——本机整体泄露无法动钱。

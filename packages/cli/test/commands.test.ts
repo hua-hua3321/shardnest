@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
-import {
-  getHomeDir,
+import {getHomeDir,
   initWallet,
   getAddress,
   signMessage,
@@ -221,6 +220,38 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(await getAddress()).toBe(result.address)
     const out = JSON.parse(await signMessage(PASSPHRASE, result.recoveryCodes[0], 'still-alive'))
     expect(out.address).toBe(result.address)
+  })
+
+  it('O1：device-share.json 写 v2 结构且 KDF 参数随密文持久化', async () => {
+    const r = await initWallet(PASSPHRASE)
+    const file = JSON.parse(await fs.readFile(path.join(getHomeDir(), 'device-share.json'), 'utf8'))
+    expect(file.version).toBe(2)
+    expect(file.share.kdf).toBeDefined()
+    expect(file.share.kdf.alg).toBe('scrypt')
+    expect(file.share.kdf.N).toBe(2 ** 16)
+    // 解密仍正常（v2 用持久化参数派生）
+    const out = JSON.parse(await signMessage(PASSPHRASE, r.recoveryCodes[0], 'o1'))
+    expect(out.address).toBe(r.address)
+  })
+
+  it('O1：v1 旧结构（无 kdf 字段）仍可解密——兼容旧钱包', async () => {
+    const r = await initWallet(PASSPHRASE)
+    const file = JSON.parse(await fs.readFile(path.join(getHomeDir(), 'device-share.json'), 'utf8'))
+    // 模拟 v1：去掉 kdf 字段
+    const v1 = { version: 1, share: { data: file.share.data, salt: file.share.salt } }
+    await fs.writeFile(path.join(getHomeDir(), 'device-share.json'), JSON.stringify(v1), { mode: 0o600 })
+    const out = JSON.parse(await signMessage(PASSPHRASE, r.recoveryCodes[0], 'v1-compat'))
+    expect(out.address).toBe(r.address)
+  })
+
+  it('O3：恢复码 CRC 为 32 位（8 hex），漏检率 1/2^32', () => {
+    const share = { index: 7, bytes: new Uint8Array([1, 2, 3, 255]) }
+    const code = encodeRecoveryCode(share)
+    const crc = code.split('-')[3]
+    expect(crc).toMatch(/^[0-9a-f]{8}$/)
+    // 篡改 CRC 任意位 → 拒绝
+    const tampered = code.slice(0, -1) + (crc.endsWith('0') ? '1' : '0')
+    expect(() => decodeRecoveryCode(tampered)).toThrow(/校验失败/)
   })
 
   it('W9：已有钱包时 initWallet 拒绝（防静默覆盖）；force=true 可覆盖', async () => {
