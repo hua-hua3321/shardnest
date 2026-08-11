@@ -58,6 +58,31 @@ describe('shardnest MCP 薄壳', () => {
     expect(created.recoveryCodes.length).toBe(2)
   })
 
+  it('wallet_create generate_mnemonic=true → 返回助记词文件路径（不经 LLM）', async () => {
+    const client = await connect()
+    const token = await createPassphraseSession(PASSPHRASE)
+    const res = await client.callTool({
+      name: 'wallet_create',
+      arguments: { passphrase_token: token, generate_mnemonic: true },
+    })
+    const data = JSON.parse((res.content[0] as { text: string }).text)
+    // 凭证隔离：助记词内容不进 LLM，只给文件路径
+    expect(data.mnemonic_file).toBeTruthy()
+    expect(data.mnemonic).toBeUndefined()
+    // 文件为 24 词
+    const fileContent = await fs.readFile(data.mnemonic_file, 'utf8')
+    const mnemonic = fileContent.split('\n').find((l) => l.trim().split(/\s+/).length === 24)!.trim()
+    expect(mnemonic.split(' ').length).toBe(24)
+  })
+
+  it('wallet_create 默认不生成助记词', async () => {
+    const client = await connect()
+    const token = await createPassphraseSession(PASSPHRASE)
+    const res = await client.callTool({ name: 'wallet_create', arguments: { passphrase_token: token } })
+    const data = JSON.parse((res.content[0] as { text: string }).text)
+    expect(data.mnemonic_file).toBeNull()
+  })
+
   it('wallet_create 带 email → 返回 backup 状态 + 恢复码文件路径（不经 LLM）', async () => {
     const client = await connect()
     const created = await createWallet(client, PASSPHRASE, 'user@example.com')

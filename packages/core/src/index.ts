@@ -1,3 +1,4 @@
+export { privateKeyToMnemonic, mnemonicToPrivateKey, isLikelyMnemonic } from './mnemonic'
 export {
   splitSecret,
   combineShares,

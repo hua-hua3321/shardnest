@@ -23,6 +23,7 @@ import { gcm } from '@noble/ciphers/aes'
 import { sendBackupShare } from './mailer'
 import { createUnlockSession } from '@wallet-service/signer'
 import { randomBytes } from '@noble/hashes/utils'
+import { privateKeyToMnemonic, mnemonicToPrivateKey } from '@wallet-service/core'
 
 /** 钱包目录（动态读取 env，便于测试隔离） */
 export function getHomeDir(): string {
@@ -31,6 +32,22 @@ export function getHomeDir(): string {
 const metaFile = () => path.join(getHomeDir(), 'metadata.json')
 const deviceFile = () => path.join(getHomeDir(), 'device-share.json')
 const recoveryFile = () => path.join(getHomeDir(), 'recovery-codes.txt')
+const mnemonicFile = () => path.join(getHomeDir(), 'mnemonic.txt')
+
+/** 助记词落盘（0600；助记词=完整私钥，用户选择生成即接受单点保管） */
+export async function saveMnemonic(mnemonic: string): Promise<string> {
+  const file = mnemonicFile()
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const content = [
+    '# shardnest 24 词助记词备份（完整私钥，单点！请勿拍照/截图/网络传输）',
+    '# 单凭此 24 词即可恢复钱包；泄露即资金丢失（与分片恢复码不同，无门限保护）',
+    '',
+    mnemonic,
+    '',
+  ].join('\n') + '\n'
+  await fs.writeFile(file, content, { mode: 0o600 })
+  return file
+}
 
 /** 恢复码落盘（0600 明文，用户自持责任；与纸备份等价，供 MCP 场景免 LLM 交付） */
 export async function saveRecoveryCodes(codes: string[]): Promise<string> {
@@ -54,6 +71,8 @@ export interface InitResult {
   backupStatus?: 'sent' | 'skipped'
   /** 恢复码本地文件路径（MCP 场景经此交付，不经 LLM） */
   recoveryFile?: string
+  /** 24 词助记词文件路径（用户选择生成时；助记词=完整私钥，经文件交付不经 LLM） */
+  mnemonicFile?: string
   /** 附加提示（如 restore 后需更新邮箱备份） */
   note?: string
 }
@@ -118,11 +137,24 @@ export function validatePassphrase(passphrase: string): void {
 
 /** 初始化：生成密钥对 → 2-of-3 分片 → 片①口令加密存设备 → 返回恢复码②③
  * 提供 email 时：自动将片③（备份分片）发送到邮箱（SMTP 未配置则 skipped）
- * 原子性：先完成所有可失败操作（含邮件发送）→ 最后落盘，失败不留下半成品
+ * mnemonic=true 时：同步生成 24 词助记词（完整私钥备份，可单独恢复；默认关闭）
+ * 原子性：先完成所有可失败操作（邮件/恢复码/助记词落盘）→ 最后落盘，失败不留下半成品
  */
-export async function initWallet(passphrase: string, email?: string): Promise<InitResult> {
+export async function initWallet(passphrase: string, email?: string, mnemonic = false): Promise<InitResult> {
   validatePassphrase(passphrase)
   const { privateKey, address } = generateKeyPair()
+  return createWalletFromPrivateKey(passphrase, privateKey, email, mnemonic)
+}
+
+/** 从既定私钥建钱包（init 与助记词恢复共用；调用方负责 privateKey 清零） */
+async function createWalletFromPrivateKey(
+  passphrase: string,
+  privateKey: Uint8Array,
+  email?: string,
+  mnemonic = false,
+): Promise<InitResult> {
+  const { privateKeyToAddress } = await import('@wallet-service/core')
+  const address = privateKeyToAddress(privateKey)
   const shares = splitSecret(privateKey, { shares: 3, threshold: 2 })
   const enc = await encryptShare(shares[0], passphrase)
   const recoveryCodes = [shares[1], shares[2]].map(encodeRecoveryCode)
@@ -131,19 +163,57 @@ export async function initWallet(passphrase: string, email?: string): Promise<In
   let backupStatus: 'sent' | 'skipped' | undefined
   if (email) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      privateKey.fill(0)
       throw new Error('邮箱格式无效')
     }
     backupStatus = await sendBackupShare(email, address, recoveryCodes[1])
   }
 
-  // 2. 可失败操作全部前置（含恢复码落盘——失败则用户拿不到恢复码=永久锁死）
+  // 2. 可失败操作全部前置（恢复码/助记词落盘）
   const recoveryFileWritten = await saveRecoveryCodes(recoveryCodes)
+  let mnemonicFileWritten: string | undefined
+  if (mnemonic) {
+    mnemonicFileWritten = await saveMnemonic(privateKeyToMnemonic(privateKey))
+  }
+
+  // 3. 原子落盘
   await fs.mkdir(getHomeDir(), { recursive: true })
   await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
   await fs.writeFile(deviceFile(), JSON.stringify({ version: 1, share: enc }, null, 2), { mode: 0o600 })
   privateKey.fill(0)
 
-  return { address, recoveryCodes, backupEmail: email, backupStatus, recoveryFile: recoveryFileWritten }
+  return {
+    address,
+    recoveryCodes,
+    backupEmail: email,
+    backupStatus,
+    recoveryFile: recoveryFileWritten,
+    mnemonicFile: mnemonicFileWritten,
+    note: mnemonic ? '助记词已生成（=完整私钥，单点）：请抄写并安全保管，勿拍照/截图/网络传输' : undefined,
+  }
+}
+
+/** 从 24 词助记词单独恢复（绕过 2-of-3；重建分片/设备片/恢复码，地址交叉校验） */
+export async function restoreFromMnemonic(
+  passphrase: string,
+  mnemonic: string,
+  expectedAddress?: string,
+  email?: string,
+): Promise<InitResult> {
+  validatePassphrase(passphrase)
+  const privateKey = mnemonicToPrivateKey(mnemonic)
+  const { privateKeyToAddress } = await import('@wallet-service/core')
+  const address = privateKeyToAddress(privateKey)
+
+  const want = expectedAddress ?? (await readOldAddress())
+  if (want && want.toLowerCase() !== address.toLowerCase()) {
+    privateKey.fill(0)
+    throw new Error(`助记词恢复出的地址 (${address}) 与目标地址 (${want}) 不一致——助记词可能抄错，操作已中止`)
+  }
+
+  const result = await createWalletFromPrivateKey(passphrase, privateKey, email, false)
+  privateKey.fill(0)
+  return { ...result, note: '已从助记词重建分片体系（2-of-3）；请妥善保存新恢复码，原助记词仍可恢复（单点，建议销毁或严格保管）' }
 }
 
 /** 显示地址（无需口令） */

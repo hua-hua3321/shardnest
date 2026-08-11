@@ -9,6 +9,7 @@ import {
   restoreWallet,
   encodeRecoveryCode,
   decodeRecoveryCode,
+  restoreFromMnemonic,
 } from '../src/commands'
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
@@ -101,6 +102,36 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(restored.note).toContain('邮箱')
     // 恢复后地址一致（私钥不变）
     expect(restored.address).toBe(first.address)
+  })
+
+  it('init 生成助记词：24 词文件落盘 + 可单独恢复同一地址（默认关闭）', async () => {
+    // 默认不生成
+    const plain = await initWallet(PASSPHRASE)
+    expect(plain.mnemonicFile).toBeUndefined()
+    // 显式生成
+    const withM = await initWallet(PASSPHRASE, undefined, true)
+    expect(withM.mnemonicFile).toBeTruthy()
+    const fileContent = await fs.readFile(withM.mnemonicFile!, 'utf8')
+    const mnemonic = fileContent.split('\n').find((l) => l.trim().split(/\s+/).length === 24)!.trim()
+    expect(mnemonic.split(' ').length).toBe(24)
+    // 助记词单独恢复 → 同一地址 + 分片体系重建
+    const restored = await restoreFromMnemonic(PASSPHRASE, mnemonic, withM.address)
+    expect(restored.address).toBe(withM.address)
+    expect(restored.recoveryCodes.length).toBe(2)
+    expect(restored.recoveryFile).toBeTruthy()
+  })
+
+  it('restoreFromMnemonic 期望地址不匹配 → 抛错', async () => {
+    const withM = await initWallet(PASSPHRASE, undefined, true)
+    const fileContent = await fs.readFile(withM.mnemonicFile!, 'utf8')
+    const mnemonic = fileContent.split('\n').find((l) => l.trim().split(/\s+/).length === 24)!.trim()
+    await expect(
+      restoreFromMnemonic(PASSPHRASE, mnemonic, '0x0000000000000000000000000000000000000000'),
+    ).rejects.toThrow(/不一致/)
+  })
+
+  it('restoreFromMnemonic 无效助记词 → 抛错', async () => {
+    await expect(restoreFromMnemonic(PASSPHRASE, 'abandon '.repeat(24).trim())).rejects.toThrow(/助记词无效/)
   })
 
   it('恢复码 index 越界（999）→ 解码抛错（P1-B：GF 域 x 坐标校验）', () => {

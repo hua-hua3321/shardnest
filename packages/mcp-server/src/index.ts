@@ -14,7 +14,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { verifySignedRequest, type SignedRequest } from '@wallet-service/protocol'
-import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile } from '@wallet-service/cli'
+import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile, restoreFromMnemonic } from '@wallet-service/cli'
 import { defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession, consumePassphraseSession } from '@wallet-service/signer'
 
 export const PLATFORM_ADDRESS = process.env.SHARDNEST_PLATFORM_ADDRESS ?? ''
@@ -27,13 +27,18 @@ export function createShardnestServer(
 
   server.tool(
     'wallet_create',
-    { passphrase_token: z.string(), email: z.string().email().optional() },
-    async ({ passphrase_token, email }) => {
+    {
+      passphrase_token: z.string(),
+      email: z.string().email().optional(),
+      // 可选：生成 24 词助记词（=完整私钥备份，可单独恢复；默认关闭）
+      generate_mnemonic: z.boolean().optional(),
+    },
+    async ({ passphrase_token, email, generate_mnemonic }) => {
       // 口令经本地口令令牌消费（CLI passphrase-token 生成；口令明文不进 LLM）
       let passphrase = await consumePassphraseSession(passphrase_token)
       let result: Awaited<ReturnType<typeof initWallet>>
       try {
-        result = await initWallet(passphrase, email)
+        result = await initWallet(passphrase, email, generate_mnemonic === true)
       } finally {
         // JS string 不可变；置空引用提示 GC 尽早回收
         passphrase = ''
@@ -43,11 +48,12 @@ export function createShardnestServer(
           type: 'text' as const,
           text: JSON.stringify({
             address: result.address,
-            // ⚠️ 恢复码不经 LLM：只返回本地文件路径（0600），用户自行查看保存
+            // ⚠️ 恢复码/助记词不经 LLM：只返回本地文件路径（0600），用户自行查看保存
             recovery_codes_file: result.recoveryFile ?? null,
+            mnemonic_file: result.mnemonicFile ?? null,
             backup_email: result.backupEmail ?? null,
             backup_status: result.backupStatus ?? null,
-            warning: '恢复码已写入本地文件，请立即查看并妥善保存；如提供邮箱，备份分片已发送',
+            warning: '恢复码已写入本地文件，请立即查看并妥善保存；如生成助记词，助记词=完整私钥（单点），请抄写后安全保管',
           }),
         }],
       }
@@ -124,22 +130,31 @@ export function createShardnestServer(
   server.tool(
     'wallet_restore',
     {
-      // 凭证隔离：恢复码经本地文件路径交付（内容不进 LLM）；口令经口令令牌（明文不进 LLM）
+      // 凭证隔离：恢复码/助记词经本地文件路径交付（内容不进 LLM）；口令经口令令牌
       recovery_file_path: z.string().optional(),
+      mnemonic_file_path: z.string().optional(),
       passphrase_token: z.string(),
       expected_address: z.string().regex(/^0x[0-9a-fA-F]{40}$/, '期望地址格式无效').optional(),
       email: z.string().email().optional(),
     },
-    async ({ recovery_file_path, passphrase_token, expected_address, email }) => {
+    async ({ recovery_file_path, mnemonic_file_path, passphrase_token, expected_address, email }) => {
       try {
         const passphrase = await consumePassphraseSession(passphrase_token)
-        const codes = await readRecoveryCodesFromFile(recovery_file_path)
-        const result = await restoreWallet(
-          passphrase,
-          [codes[0], codes[1]],
-          expected_address,
-          email,
-        )
+        // 二选一：助记词文件（单份完整恢复）或恢复码文件（2-of-3 恢复）
+        let result: Awaited<ReturnType<typeof restoreWallet>>
+        if (mnemonic_file_path) {
+          const mnemonic = (await Bun.file(mnemonic_file_path).text())
+            .split('\n').find((l) => l.trim().split(/\s+/).length >= 24)?.trim() ?? ''
+          result = await restoreFromMnemonic(passphrase, mnemonic, expected_address, email)
+        } else {
+          const codes = await readRecoveryCodesFromFile(recovery_file_path)
+          result = await restoreWallet(
+            passphrase,
+            [codes[0], codes[1]],
+            expected_address,
+            email,
+          )
+        }
         return {
           content: [{
             type: 'text' as const,

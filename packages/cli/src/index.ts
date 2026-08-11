@@ -9,7 +9,7 @@
  *   shardnest restore     # 输入 2 个恢复码恢复（新设备/口令丢失）
  */
 import * as readline from 'node:readline'
-import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken } from './commands'
+import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic } from './commands'
 import { createPassphraseSession } from '@wallet-service/signer'
 
 async function prompt(question: string): Promise<string> {
@@ -59,7 +59,13 @@ async function main() {
     case 'init': {
       const passphrase = await promptSecret('设置口令（>=12 位，用于加密设备分片）: ')
       const email = await prompt('邮箱（可选，自动发送备份分片，回车跳过）: ')
-      const result = await initWallet(passphrase, email || undefined)
+      console.log('\n是否生成 24 词助记词备份？（默认不生成）')
+      console.log('  ✅ 生成：单凭 24 词即可恢复钱包（最简恢复路径，行业标准格式）')
+      console.log('  ⚠️  代价：助记词 = 完整私钥（单点）——泄露即资金丢失，无门限保护，需严格保管')
+      console.log('  ℹ️  说明：12 词无法承载 32 字节私钥（容量不足），故仅支持 24 词；分片恢复码机制不受影响，二者并存')
+      console.log('  💡 建议：普通用户不生成（分片已足够）；专业/高资产用户可生成并离线保管')
+      const wantMnemonic = (await prompt('生成 24 词助记词？[y/N]: ')).toLowerCase()
+      const result = await initWallet(passphrase, email || undefined, wantMnemonic === 'y' || wantMnemonic === 'yes')
       console.log('\n✅ 钱包已创建')
       console.log(`地址: ${result.address}`)
       if (result.backupEmail) {
@@ -67,6 +73,8 @@ async function main() {
       }
       console.log('\n⚠️  恢复码（请立即保存，丢失后设备损坏将无法找回）:')
       for (const code of result.recoveryCodes) console.log(`  ${code}`)
+      if (result.mnemonicFile) console.log(`\n🔑 24 词助记词已写入: ${result.mnemonicFile}（=完整私钥，请抄写后安全保管）`)
+      if (result.note) console.log(`\n📝 ${result.note}`)
       break
     }
     case 'address': {
@@ -78,6 +86,23 @@ async function main() {
       const passphrase = await promptSecret('口令: ')
       const code = await prompt('恢复码: ')
       console.log(await signMessage(passphrase, code, args.join(' ')))
+      break
+    }
+    case 'restore-mnemonic': {
+      const passphrase = await promptSecret('设置新口令（>=12 位）: ')
+      console.log('请输入 24 词助记词（以空格分隔）:')
+      const mnemonic = await prompt('助记词: ')
+      const expected = await prompt('期望地址（可选，强烈建议输入以校验恢复正确性，回车跳过）: ')
+      const email = await prompt('邮箱（可选，自动更新邮箱备份分片，回车跳过）: ')
+      const result = await restoreFromMnemonic(passphrase, mnemonic, expected || undefined, email || undefined)
+      console.log('\n✅ 钱包已从助记词恢复')
+      console.log(`地址: ${result.address}`)
+      if (result.backupEmail) {
+        console.log(`邮箱备份: ${result.backupEmail} → ${result.backupStatus === 'sent' ? '✅ 已发送' : '⚠️ 未配置 SMTP，请手动保存恢复码'}`)
+      }
+      console.log('\n⚠️  新恢复码（2-of-3 分片已重建）:')
+      for (const code of result.recoveryCodes) console.log(`  ${code}`)
+      if (result.note) console.log(`\n📝 ${result.note}`)
       break
     }
     case 'restore': {
@@ -98,7 +123,7 @@ async function main() {
       break
     }
     default:
-      console.log('用法: shardnest [init|address|passphrase-token|unlock|sign|restore]')
+      console.log('用法: shardnest [init|address|passphrase-token|unlock|sign|restore|restore-mnemonic]')
   }
 }
 

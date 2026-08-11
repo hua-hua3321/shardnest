@@ -12,5 +12,6 @@ export {
   createUnlockToken,
   validatePassphrase,
   readRecoveryCodesFromFile,
+  restoreFromMnemonic,
   type InitResult,
 } from './commands'
