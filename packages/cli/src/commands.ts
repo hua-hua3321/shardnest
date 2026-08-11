@@ -393,6 +393,71 @@ export async function createUnlockToken(passphrase: string, recoveryCode: string
   }
 }
 
+/** 确认短语：彻底删除必须输入的不可逆确认 */
+export const WIPE_CONFIRM_PHRASE = 'PERMANENT DELETE'
+
+/**
+ * 安全删除单个文件：随机数据覆写 3 遍（尽力抹除，防常规恢复）→ unlink。
+ * SSD 闪存级残余需取证设备才能读取，普通威胁模型下不可恢复。
+ */
+async function secureDelete(file: string): Promise<void> {
+  try {
+    const stat = await fs.stat(file)
+    if (stat.size > 0) {
+      const fh = await fs.open(file, 'r+')
+      const chunk = randomBytes(Math.min(stat.size, 64 * 1024))
+      for (let pass = 0; pass < 3; pass++) {
+        let written = 0
+        while (written < stat.size) {
+          const n = await fh.write(chunk, 0, Math.min(chunk.length, stat.size - written), written)
+          written += n
+        }
+      }
+      await fh.close()
+    }
+  } catch {
+    // 文件不存在或不可写：跳过覆写，直接删除
+  }
+  await fs.rm(file, { force: true })
+}
+
+/**
+ * 彻底删除钱包（不可恢复）：
+ * - 覆写并删除 device-share / recovery-codes / mnemonic / metadata / unlock 会话
+ * - 执行前必须输入确认短语 WIPE_CONFIRM_PHRASE（防误删）
+ * - ⚠️ 调用前必须提醒用户：确认已保存恢复码/助记词（用户保存的那一份是唯一恢复途径）
+ */
+export async function wipeWallet(confirmPhrase: string): Promise<{ removed: string[] }> {
+  if (confirmPhrase !== WIPE_CONFIRM_PHRASE) {
+    throw new Error('确认短语不匹配，已中止（防止误删）')
+  }
+  const removed: string[] = []
+  const targets = [metaFile(), deviceFile(), recoveryFile(), mnemonicFile()]
+  for (const f of targets) {
+    try {
+      await fs.stat(f)
+      await secureDelete(f)
+      removed.push(f)
+    } catch {
+      // 不存在则跳过
+    }
+  }
+  // unlock/ 目录（令牌会话）
+  try {
+    const dir = getUnlockDir()
+    const entries = await fs.readdir(dir)
+    for (const e of entries) {
+      const f = path.join(dir, e)
+      await secureDelete(f)
+      removed.push(f)
+    }
+    await fs.rmdir(dir).catch(() => {})
+  } catch {
+    // 无 unlock 目录
+  }
+  return { removed }
+}
+
 /** 读取旧 metadata 中的地址（不存在返回 undefined） */
 async function readOldAddress(): Promise<string | undefined> {
   try {

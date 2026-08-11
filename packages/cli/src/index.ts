@@ -9,7 +9,7 @@
  *   shardnest restore     # 输入 2 个恢复码恢复（新设备/口令丢失）
  */
 import * as readline from 'node:readline'
-import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes } from './commands'
+import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE } from './commands'
 import { createPassphraseSession } from '@wallet-service/signer'
 
 async function prompt(question: string): Promise<string> {
@@ -88,6 +88,23 @@ async function main() {
       console.log(await signMessage(passphrase, code, args.join(' ')))
       break
     }
+    case 'wipe': {
+      console.log('\n⚠️  彻底删除（不可恢复）！')
+      console.log('    将覆写并删除本机全部密钥材料：设备分片、恢复码、助记词、钱包数据')
+      console.log('    删除后，本机不再持有任何可动用资金的东西——但也无法再本地恢复')
+      console.log('\n📌 执行前请确认：')
+      console.log('    1. 恢复码/助记词已保存到安全位置（纸/密码管理器/邮箱备份）——这是唯一恢复途径')
+      console.log('    2. 业务平台绑定等操作已处理完毕')
+      const confirm = await prompt(`\n请输入确认短语「${WIPE_CONFIRM_PHRASE}」以继续: `)
+      if (confirm !== WIPE_CONFIRM_PHRASE) {
+        console.log('\n❌ 确认短语不匹配，已中止（未删除任何文件）')
+        break
+      }
+      const { removed } = await wipeWallet(confirm)
+      console.log(`\n✅ 已彻底删除 ${removed.length} 个文件/会话（覆写 3 遍 + 删除，不可恢复）`)
+      console.log('   使用您保存的恢复码（任意 2 片）或 24 词助记词，随时可重建钱包')
+      break
+    }
     case 'mnemonic-export': {
       console.log('⚠️  导出的 24 词助记词 = 完整私钥（单点）：泄露即资金丢失，请离线严格保管')
       console.log('    选择分片来源：')
@@ -147,7 +164,7 @@ async function main() {
       break
     }
     default:
-      console.log('用法: shardnest [init|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export]')
+      console.log('用法: shardnest [init|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export|wipe]')
   }
 }
 

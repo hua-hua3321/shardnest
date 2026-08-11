@@ -44,7 +44,7 @@ async function connect(approval?: (req: { action: string; display: string }) => 
 }
 
 describe('shardnest MCP 薄壳', () => {
-  it('注册 5 个工具', async () => {
+  it('注册 6 个工具', async () => {
     const client = await connect()
     const tools = await client.listTools()
     const names = tools.tools.map((t) => t.name).sort()
@@ -54,7 +54,27 @@ describe('shardnest MCP 薄壳', () => {
       'wallet_create',
       'wallet_mnemonic_export',
       'wallet_restore',
+      'wallet_wipe',
     ])
+  })
+
+  it('wallet_wipe：用户拒绝确认 → USER_REJECTED（高风险闸门默认拒绝）', async () => {
+    const client = await connect(() => false)
+    const res = await client.callTool({ name: 'wallet_wipe', arguments: {} })
+    const out = JSON.parse((res.content[0] as { text: string }).text)
+    expect(out.error).toBe('USER_REJECTED')
+  })
+
+  it('wallet_wipe：确认放行 → 本机密钥材料彻底删除', async () => {
+    const client = await connect()
+    const created = await createWallet(client, PASSPHRASE)
+    expect(created.recoveryCodes.length).toBeGreaterThan(0)
+    const res = await client.callTool({ name: 'wallet_wipe', arguments: {} })
+    const out = JSON.parse((res.content[0] as { text: string }).text)
+    expect(out.removed_count).toBeGreaterThanOrEqual(3)
+    expect(out.warning).toContain('不可恢复')
+    // 本地恢复码文件已删除
+    await expect(fs.readFile(path.join(getHomeDir(), 'recovery-codes.txt'))).rejects.toThrow()
   })
 
   it('wallet_create → 返回地址 + 恢复码', async () => {

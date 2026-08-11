@@ -15,5 +15,7 @@ export {
   restoreFromMnemonic,
   exportMnemonic,
   exportMnemonicFromCodes,
+  wipeWallet,
+  WIPE_CONFIRM_PHRASE,
   type InitResult,
 } from './commands'

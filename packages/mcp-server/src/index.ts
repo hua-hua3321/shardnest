@@ -14,7 +14,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { verifySignedRequest, type SignedRequest } from '@wallet-service/protocol'
-import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile, restoreFromMnemonic, exportMnemonicFromCodes } from '@wallet-service/cli'
+import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile, restoreFromMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE } from '@wallet-service/cli'
 import { defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession, consumePassphraseSession } from '@wallet-service/signer'
 
 export const PLATFORM_ADDRESS = process.env.SHARDNEST_PLATFORM_ADDRESS ?? ''
@@ -102,6 +102,33 @@ export function createShardnestServer(
         }
       } catch (err) {
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'EXPORT_FAILED', message: (err as Error).message }) }] }
+      }
+    },
+  )
+
+  server.tool(
+    'wallet_wipe',
+    {
+      // 无敏感参数；高风险操作：必须通过 approval 用户确认闸门（默认拒绝）
+    },
+    async () => {
+      const approved = await approval({ action: 'wipe_wallet', display: '彻底删除本机钱包全部密钥材料（不可恢复）' })
+      if (!approved) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'USER_REJECTED' }) }] }
+      }
+      try {
+        const { removed } = await wipeWallet(WIPE_CONFIRM_PHRASE)
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              removed_count: removed.length,
+              warning: '本机密钥材料已彻底删除（不可恢复）；请确保已用离线保存的恢复码/助记词完成备份',
+            }),
+          }],
+        }
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'WIPE_FAILED', message: (err as Error).message }) }] }
       }
     },
   )

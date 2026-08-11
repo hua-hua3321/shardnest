@@ -13,6 +13,8 @@ import {
   exportMnemonic,
   exportMnemonicFromCodes,
   saveRecoveryCodes,
+  wipeWallet,
+  WIPE_CONFIRM_PHRASE,
 } from '../src/commands'
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
@@ -179,6 +181,22 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     await expect(
       exportMnemonicFromCodes(a.recoveryCodes[0], b.recoveryCodes[1]),
     ).rejects.toThrow(/不一致/)
+  })
+
+  it('wipe：错误确认短语拒绝 → 正确短语彻底删除 → 保存的恢复码可重建', async () => {
+    const result = await initWallet(PASSPHRASE)
+    const savedCodes = [...result.recoveryCodes] // 用户保存的副本（wipe 前）
+    // 错误确认短语 → 拒绝且不删
+    await expect(wipeWallet('WRONG')).rejects.toThrow(/不匹配/)
+    await expect(fs.stat(result.recoveryFile!)).resolves.toBeTruthy()
+    // 正确短语 → 全部删除
+    const { removed } = await wipeWallet(WIPE_CONFIRM_PHRASE)
+    expect(removed.length).toBeGreaterThanOrEqual(3) // meta + device + recovery
+    await expect(fs.stat(result.recoveryFile!)).rejects.toThrow()
+    await expect(fs.stat(getHomeDir() + '/device-share.json')).rejects.toThrow()
+    // 用用户保存的恢复码可重建（设备文件已删，走 2 恢复码路径）
+    const restored = await restoreWallet(PASSPHRASE, [savedCodes[0], savedCodes[1]], result.address)
+    expect(restored.address).toBe(result.address)
   })
 
   it('restoreFromMnemonic 无效助记词 → 抛错', async () => {
