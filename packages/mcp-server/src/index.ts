@@ -61,6 +61,20 @@ export function createShardnestServer(
       generate_mnemonic: z.boolean().optional(),
     },
     async ({ passphrase_token, email, generate_mnemonic }) => {
+      // I11: 存在性检查前置——钱包已存在时不消费口令令牌（避免用户重新生成令牌）
+      const existing = await getAddress().catch(() => null)
+      if (existing) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              error: 'WALLET_EXISTS',
+              address: existing,
+              message: '钱包已存在；如需重建请先 wallet_wipe（需宿主 approval 确认），或用 CLI init 交互确认',
+            }),
+          }],
+        }
+      }
       // 口令经本地口令令牌消费（CLI passphrase-token 生成；口令明文不进 LLM）
       let passphrase = await consumePassphraseSession(passphrase_token)
       let result: Awaited<ReturnType<typeof initWallet>>

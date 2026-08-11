@@ -9,7 +9,7 @@ import { issueSignedRequest } from '@wallet-service/protocol'
 import { generatePrivateKey, privateKeyToAddress } from '@wallet-service/core'
 import { recoverSigner } from '@wallet-service/verify-sdk'
 import { createUnlockToken } from '@wallet-service/cli'
-import { createPassphraseSession } from '@wallet-service/signer'
+import {createPassphraseSession, defaultApproval} from '@wallet-service/signer'
 
 const TEST_HOME = path.join(process.cwd(), '.test-shardnest-mcp')
 
@@ -43,6 +43,15 @@ async function connect(approval?: (req: { action: string; display: string }) => 
   return client
 }
 
+/** 生产默认配置连接（defaultApproval：仅 sign_message 放行，高风险全拒） */
+async function connectWithDefaultApproval() {
+  const server = createShardnestServer(defaultApproval, platformAddr)
+  const client = new Client({ name: 'test-client', version: '1.0.0' })
+  const [c2s, s2c] = InMemoryTransport.createLinkedPair()
+  await Promise.all([server.connect(s2c), client.connect(c2s)])
+  return client
+}
+
 describe('shardnest MCP 薄壳', () => {
   it('注册 6 个工具', async () => {
     const client = await connect()
@@ -58,6 +67,17 @@ describe('shardnest MCP 薄壳', () => {
     ])
   })
 
+  it('W12：默认 approval 下 wallet_wipe 拒绝（防 LLM 无确认删钱包）；CLI 短语不构成 MCP 防线', async () => {
+    const client = await connectWithDefaultApproval()
+    const created = await createWallet(client, PASSPHRASE)
+    const res = await client.callTool({ name: 'wallet_wipe', arguments: { scope: 'all' } })
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
+    expect(out.error).toBe('USER_REJECTED')
+    // 钱包未被删除（地址仍可读）
+    const addrRes = await client.callTool({ name: 'wallet_address', arguments: {} })
+    expect(((addrRes.content as unknown[])[0] as { text: string }).text).toBe(created.address)
+  })
+
   it('wallet_wipe：用户拒绝确认 → USER_REJECTED（高风险闸门默认拒绝）', async () => {
     const client = await connect(() => false)
     const res = await client.callTool({ name: 'wallet_wipe', arguments: {} })
@@ -65,8 +85,8 @@ describe('shardnest MCP 薄壳', () => {
     expect(out.error).toBe('USER_REJECTED')
   })
 
-  it('wallet_wipe：默认 scope=saved → 仅删明文备份，钱包保留', async () => {
-    const client = await connect()
+  it('wallet_wipe：宿主放行 + 默认 scope=saved → 仅删明文备份，钱包保留', async () => {
+    const client = await connect(() => true) // 宿主注入放行 approval（如 OS 弹窗确认）
     const created = await createWallet(client, PASSPHRASE)
     const res = await client.callTool({ name: 'wallet_wipe', arguments: {} })
     const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
@@ -78,8 +98,8 @@ describe('shardnest MCP 薄壳', () => {
     expect(((addrRes.content as unknown[])[0] as { text: string }).text).toBe(created.address)
   })
 
-  it('wallet_wipe：scope=all → 本机密钥材料彻底删除', async () => {
-    const client = await connect()
+  it('wallet_wipe：宿主放行 + scope=all → 本机密钥材料彻底删除', async () => {
+    const client = await connect(() => true) // 宿主注入放行 approval（如 OS 弹窗确认）
     const created = await createWallet(client, PASSPHRASE)
     expect(created.recoveryCodes.length).toBeGreaterThan(0)
     const res = await client.callTool({ name: 'wallet_wipe', arguments: { scope: 'all' } })

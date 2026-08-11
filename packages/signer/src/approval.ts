@@ -13,10 +13,12 @@ export interface ApprovalRequest {
 
 export type ApprovalHandler = (req: ApprovalRequest) => Promise<boolean> | boolean
 
-/** 默认：仅允许低风险 action（sign_message 用于绑定/挑战），高风险一律拒绝 */
+/** 默认：仅允许低风险 action（sign_message 用于绑定/挑战），高风险一律拒绝
+ * wipe_wallet 默认拒绝（W12）：MCP 路径的确认短语是代码硬编码常量、不经用户，
+ * 不构成防线；不可逆高危操作必须由宿主注入 approval handler（如 OS 弹窗）显式
+ * 放行。CLI 路径不经 approval，由用户手输 PERMANENT DELETE 确认，不受影响。
+ */
 export const defaultApproval: ApprovalHandler = (req) => {
   if (req.action === 'sign_message') return true
-  // wipe 已由确认短语（PERMANENT DELETE）作最终防线，默认放行以便功能可用
-  if (req.action === 'wipe_wallet') return true
   return false
 }

@@ -114,7 +114,7 @@ Sensitive credentials never appear in tool arguments — they travel via local t
 
 | Tool | Arguments | Notes |
 |------|-----------|-------|
-| `wallet_create` | `passphrase_token`, `email?`, `generate_mnemonic?` | returns `recovery_codes_file` / `mnemonic_file` paths (no plaintext to LLM) |
+| `wallet_create` | `passphrase_token`, `email?`, `generate_mnemonic?` | returns `recovery_codes_file` / `mnemonic_file` paths (no plaintext to LLM); **rejects when a wallet already exists** (`WALLET_EXISTS`, no token consumed) — rebuild requires `wallet_wipe` (host approval) or CLI `init` interactive confirm |
 | `wallet_address` | — | current address |
 | `wallet_mnemonic_export` | — | approval-gated; writes 24-word mnemonic to local file, returns path only |
 | `signed_request_sign` | `signed_request`, `unlock_token` | double-gated (platform endorsement + user approval); signs `action:intent_hash` |
