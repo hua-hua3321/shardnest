@@ -13,7 +13,7 @@ export {
   toChecksumAddress,
   generateKeyPair,
   generateEntropy,
-  deriveKEK, kdfParamsOf, SCRYPT_OPTS,
+  deriveKEK, kdfParamsOf, SCRYPT_OPTS, LEGACY_SCRYPT_OPTS_V1,
   type KeyPair,
   type KdfParams,
 } from './keys'

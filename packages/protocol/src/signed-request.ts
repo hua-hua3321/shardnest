@@ -35,8 +35,8 @@ export interface SignedRequest {
  * 消除跨语言陷阱：UTF-8 字节 + 4 字节大端长度前缀，任何语言实现完全一致；
  * 整数固定 8 字节大端（无 JSON 整数/浮点歧义）。
  * 布局：
- *   v(1B) | action(len4+utf8) | intent_hash(32B) | display(len4+utf8)
- *   | user_id(len4+utf8) | wallet_address(20B) | nonce(len4+utf8) | expires_at(8B BE)
+ *   v(1B) | action(len4+utf8) | intent_hash(len4+32B) | display(len4+utf8)
+ *   | user_id(len4+utf8) | wallet_address(len4+20B) | nonce(len4+utf8) | expires_at(8B BE)
  */
 export function canonicalBytes(req: Omit<SignedRequest, 'platform_signature'>): Uint8Array {
   const enc = new TextEncoder()

@@ -10,7 +10,7 @@
  */
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
-import { combineShares, type Share } from '@wallet-service/core'
+import type { Share } from '@wallet-service/core'
 
 /** EIP-191 前缀消息哈希 */
 function personalMessageHash(message: Uint8Array): Uint8Array {
@@ -40,15 +40,8 @@ export class WalletVault {
     return this.privKey !== null
   }
 
-  /** 用任意 threshold 个分片解锁私钥（内存组合，用完调用 wipe） */
-  unlock(shares: Share[]): void {
-    if (this.privKey) this.wipe()
-    const priv = combineShares(shares)
-    assertValidPrivateKey(priv)
-    this.privKey = priv
-  }
-
-  /** 直接注入已解锁的私钥（解锁会话通道；用完必须 wipe） */
+  /** 注入已组合/已派生的账户私钥（O4A：命令层完成 熵组合→BIP-39/44 派生；
+   * 旧 unlock(shares) 已移除——分片对象为熵，组合结果不可直接作私钥） */
   unlockPrivateKey(privateKey: Uint8Array): void {
     if (this.privKey) this.wipe()
     assertValidPrivateKey(privateKey)

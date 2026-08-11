@@ -30,12 +30,13 @@ export function mnemonicToEntropy(mnemonic: string): Uint8Array {
   }
 }
 
-/** 助记词 → seed（BIP-39 PBKDF2-HMAC-SHA512 2048 轮） */
+/** 助记词 → seed（BIP-39 PBKDF2-HMAC-SHA512 2048 轮）
+ * ⚠️ seed = 钱包根访问权（敏感度等同私钥）——调用方使用后必须 fill(0)（不变式 5） */
 export function mnemonicToSeed(mnemonic: string): Uint8Array {
   return mnemonicToSeedSync(mnemonic.trim(), '')
 }
 
-/** seed → BIP-32 账户私钥（m/44'/60'/0'/0/0） */
+/** seed → BIP-32 账户私钥（m/44'/60'/0'/0/0）；不修改 seed（清零由调用方负责） */
 export function derivePrivateKeyFromSeed(seed: Uint8Array): Uint8Array {
   const hd = HDKey.fromMasterSeed(seed)
   const child = hd.derive(BIP44_PATH)

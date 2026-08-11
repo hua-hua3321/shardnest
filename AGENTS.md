@@ -38,9 +38,7 @@ core（纯密码学，无 IO）
   ├─ shamir.ts   GF(2^8) SSS（生成元 3 建表；split/combine/reshare）
   └─ keys.ts     CSPRNG 熵（根）、BIP-39/44 派生私钥、keccak 地址、EIP-55、scrypt KEK
   └─ mnemonic.ts 熵↔24 词标准编码（@scure/bip39）、seed、BIP-32 m/44'/60'/0'/0/0 派生
-signer（签名守护与凭证会话）
-  ├─ vault.ts           WalletVault：分片解锁→EIP-191 签名→wipe（唯一持钥者）
-  ├─ approval.ts        双闸门之「用户确认」回调抽象（默认仅放行 sign_message）
+signvault.ts   WalletVault：注入已派生私钥→EIP-191 签名→wipe（O4A：组合/派生在命令层）n_message）
   └─ unlock-session.ts  令牌会话：unlock（私钥）/passphrase（口令）两型，
                          0600 加密落盘 + 5min TTL + rename 原子消费（单次）
 cli（命令实现，MCP 的库 API 经 src/api.ts 的 exports 字段暴露）
@@ -48,7 +46,7 @@ cli（命令实现，MCP 的库 API 经 src/api.ts 的 exports 字段暴露）
   ├─ mailer.ts    SMTP 备份分片（片③）发送（SHARDNEST_SMTP_* 环境变量）
   └─ index.ts     CLI 入口（掩码输入 promptSecret）
 verify-sdk（平台侧验签，verify-only 零密钥）
-protocol（signed_request v1：平台背书签发/钱包验签；canonicalString JSON 序列化）
+protocol（signed_request v1：平台背书签发/钱包验签；canonicalBytes length-prefixed 二进制）
 mcp-server（薄壳，无密钥：6 工具 + 双闸门接线）
 ```
 

@@ -12,9 +12,11 @@ import { bytesToHex, randomBytes } from '@noble/hashes/utils'
 /** secp256k1 曲线阶 n（私钥必须 < n） */
 const CURVE_ORDER = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141')
 
-/** KEK 派生参数（scrypt 高成本防暴力破解；2^16=64MB 内存，兼顾 Web 端） */
-/** scrypt 默认参数（本地单用户 CLI/MCP；O1 起随密文持久化，可平滑升级） */
-export const SCRYPT_OPTS = { N: 2 ** 17, r: 8, p: 1, dkLen: 32 } as const // O2: OWASP 2023 下限（128MB），本地单用户可接受
+/** KEK 派生参数（scrypt 高成本防暴力破解；O1 起随密文持久化，可平滑升级） */
+export const SCRYPT_OPTS = { N: 2 ** 17, r: 8, p: 1, dkLen: 32 } as const // O2: OWASP 2023 下限（128MB）
+
+/** v1 历史参数（C1：无 kdf 字段的旧钱包仅可能以 2^16 加密——回退必须用它而非新默认） */
+export const LEGACY_SCRYPT_OPTS_V1 = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 } as const
 
 /** 持久化到密文的 KDF 元数据（RFC 8018 / age / 1Password 同款实践） */
 export interface KdfParams {

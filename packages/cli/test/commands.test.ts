@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
+import { splitSecret } from '@wallet-service/core'
+import { deriveKEK, LEGACY_SCRYPT_OPTS_V1 } from '@wallet-service/core'
+import { gcm } from '@noble/ciphers/aes'
+import { randomBytes } from '@noble/hashes/utils'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 import {getHomeDir,
@@ -234,14 +238,34 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(out.address).toBe(r.address)
   })
 
-  it('O1：v1 旧结构（无 kdf 字段）仍可解密——兼容旧钱包', async () => {
-    const r = await initWallet(PASSPHRASE)
-    const file = JSON.parse(await fs.readFile(path.join(getHomeDir(), 'device-share.json'), 'utf8'))
-    // 模拟 v1：去掉 kdf 字段
-    const v1 = { version: 1, share: { data: file.share.data, salt: file.share.salt } }
+  it('C1：真实 v1 钱包（2^16 加密、无 kdf 字段）仍可解密——向后兼容', async () => {
+    // 构造真实 v1 钱包：熵 → 分片 → 用 LEGACY（N=2^16）加密片① → 写 v1 结构
+    const entropy = new Uint8Array(32).fill(5)
+    const shares = splitSecret(entropy, { shares: 3, threshold: 2 })
+    const salt = randomBytes(16)
+    const kek = await deriveKEK(PASSPHRASE, salt, LEGACY_SCRYPT_OPTS_V1) // v1 实际参数
+    const nonce = randomBytes(12)
+    const cipher = gcm(kek, nonce)
+    const payload = new Uint8Array(1 + shares[0].bytes.length)
+    payload[0] = shares[0].index
+    payload.set(shares[0].bytes, 1)
+    const ct = cipher.encrypt(payload)
+    const v1 = {
+      version: 1,
+      share: {
+        data: Buffer.from(nonce).toString('base64') + '.' + Buffer.from(ct).toString('base64'),
+        salt: Buffer.from(salt).toString('base64'),
+      },
+    }
+    const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+    const address = privateKeyToAddress(derivePrivateKeyFromEntropy(entropy))
+    await fs.mkdir(getHomeDir(), { recursive: true })
     await fs.writeFile(path.join(getHomeDir(), 'device-share.json'), JSON.stringify(v1), { mode: 0o600 })
-    const out = JSON.parse(await signMessage(PASSPHRASE, r.recoveryCodes[0], 'v1-compat'))
-    expect(out.address).toBe(r.address)
+    await fs.writeFile(path.join(getHomeDir(), 'metadata.json'), JSON.stringify({ version: 1, address }), { mode: 0o600 })
+    await saveRecoveryCodes([encodeRecoveryCode(shares[1])], true) // emailed → 本地 1 片
+    // v1 钱包解密成功且地址正确（回退 LEGACY 参数而非新默认）
+    const out = JSON.parse(await signMessage(PASSPHRASE, encodeRecoveryCode(shares[1]), 'v1-real'))
+    expect(out.address).toBe(address)
   })
 
   it('O3：恢复码 CRC 为 32 位（8 hex），漏检率 1/2^32', () => {

@@ -18,6 +18,7 @@ import {
   reshareShares,
   deriveKEK,
   kdfParamsOf,
+  LEGACY_SCRYPT_OPTS_V1,
   type KdfParams,
   type Share,
 } from '@wallet-service/core'
@@ -111,9 +112,11 @@ export function decodeRecoveryCode(code: string): Share {
   // index 必须为 [1,255] 整数（GF(256) x 坐标域）
   if (!Number.isInteger(index) || index < 1 || index > 255) throw new Error('恢复码 index 超出有效范围')
   if (!/^[0-9a-f]{2,128}$/.test(hex) || hex.length % 2 !== 0) throw new Error('恢复码 hex 格式无效')
-  // O3: 32 位 CRC（旧 8 位码校验失败 → fail-safe，用户重新获取即可）
-  const expectCrc = Buffer.from(keccak_256(new TextEncoder().encode(`${index}:${hex}`)).slice(0, 4)).toString('hex')
-  if (crc !== expectCrc) throw new Error('恢复码校验失败（可能抄错/损坏），请核对后重试')
+  // O3: 32 位 CRC；W4 双宽兼容——旧 8 位码（批次前生成）仍放行（恢复码无法重新获取）
+  const k = keccak_256(new TextEncoder().encode(`${index}:${hex}`))
+  const crc32 = Buffer.from(k.slice(0, 4)).toString('hex')
+  const crc8 = k[0].toString(16).padStart(2, '0')
+  if (crc !== crc32 && crc !== crc8) throw new Error('恢复码校验失败（可能抄错/损坏），请核对后重试')
   return { index, bytes: new Uint8Array(Buffer.from(hex, 'hex')) }
 }
 
@@ -136,9 +139,11 @@ async function encryptShare(share: Share, passphrase: string): Promise<{ data: s
 }
 
 /** 解密设备分片（v1 无 kdf 字段 → 用默认参数，兼容旧钱包） */
+/** 解密设备分片：v2+ 用密文持久化 kdf 参数；v1（无 kdf 字段）回退历史 2^16 参数
+ * （C1：回退必须用 v1 实际加密参数，否则真实 v1 钱包被锁出） */
 async function decryptShare(enc: { data: string; salt: string; kdf?: KdfParams }, passphrase: string): Promise<Share> {
   const salt = Uint8Array.from(Buffer.from(enc.salt, 'base64'))
-  const kek = await deriveKEK(passphrase, salt, enc.kdf)
+  const kek = await deriveKEK(passphrase, salt, enc.kdf ?? LEGACY_SCRYPT_OPTS_V1)
   const [nonceB64, ctB64] = enc.data.split('.')
   const nonce = Uint8Array.from(Buffer.from(nonceB64, 'base64'))
   const ct = Uint8Array.from(Buffer.from(ctB64, 'base64'))
@@ -179,7 +184,9 @@ export async function initWallet(passphrase: string, email?: string, mnemonic = 
 }
 
 /** 从既定熵建钱包（init/恢复码恢复/助记词恢复共用；调用方负责 entropy 清零）
- * O4A: 分片对象=熵（32 字节）——任意 2 片可导出助记词，也可派生私钥签名 */
+ * O4A: 分片对象=熵（32 字节）——任意 2 片可导出助记词，也可派生私钥签名
+ * W3: 敏感材料创建后立即进入 try/finally——所有早抛路径（邮箱校验/落盘失败）
+ *     均保证熵/私钥/分片清零（不变式 5） */
 async function createWalletFromEntropy(
   passphrase: string,
   entropy: Uint8Array,
@@ -190,59 +197,60 @@ async function createWalletFromEntropy(
   const privateKey = derivePrivateKeyFromEntropy(entropy) // BIP-39/44 派生
   const address = privateKeyToAddress(privateKey)
   const shares = splitSecret(entropy, { shares: 3, threshold: 2 })
-  const enc = await encryptShare(shares[0], passphrase)
-  const recoveryCodes = [shares[1], shares[2]].map(encodeRecoveryCode)
-
-  // 1. 可失败操作先行：邮箱校验 + 发送（失败抛错 → 不落盘）
-  let backupStatus: 'sent' | 'skipped' | undefined
-  if (email) {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      privateKey.fill(0)
-      throw new Error('邮箱格式无效')
-    }
-    backupStatus = await sendBackupShare(email, address, recoveryCodes[1])
-  }
-
-  // 2. 可失败操作全部前置（恢复码/助记词落盘）
-  //    存储策略 A+B：邮箱已送达（sent）→ 本地只存片②（片③在邮箱，三处分布）；
-  //    skipped/无邮箱 → 本地存 2 片（显著警告，用户自担）
-  const emailed = backupStatus === 'sent'
-  const localCodes = emailed ? [recoveryCodes[0]] : recoveryCodes
-  const recoveryFileWritten = await saveRecoveryCodes(localCodes, emailed)
-  let mnemonicFileWritten: string | undefined
-  if (mnemonic) {
-    mnemonicFileWritten = await saveMnemonic(entropyToMnemonic(entropy)) // O4A: 熵→标准 24 词
-  }
-
-  // 3. 原子落盘 + 回滚（失败时清理全部已写文件——含明文恢复码/助记词=私钥材料）
   try {
-    await fs.mkdir(getHomeDir(), { recursive: true })
-    await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
-    await fs.writeFile(deviceFile(), JSON.stringify({ version: 2, share: enc }, null, 2), { mode: 0o600 })
-  } catch (err) {
-    await fs.rm(metaFile(), { force: true })
-    await fs.rm(deviceFile(), { force: true })
-    // 失败回滚用普通删除而非 secureDelete：文件刚写入未持久化，且
-    // secureDelete 在 APFS/SSD（CoW）上同样无法保证物理抹除——普通删除足够
-    await fs.rm(recoveryFileWritten, { force: true }) // 明文恢复码（2 片=私钥）
-    if (mnemonicFileWritten) await fs.rm(mnemonicFileWritten, { force: true }) // 助记词=完整私钥
-    throw err
+    const enc = await encryptShare(shares[0], passphrase)
+    const recoveryCodes = [shares[1], shares[2]].map(encodeRecoveryCode)
+
+    // 1. 可失败操作先行：邮箱校验 + 发送（失败抛错 → 不落盘）
+    let backupStatus: 'sent' | 'skipped' | undefined
+    if (email) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        throw new Error('邮箱格式无效')
+      }
+      backupStatus = await sendBackupShare(email, address, recoveryCodes[1])
+    }
+
+    // 2. 可失败操作全部前置（恢复码/助记词落盘）
+    //    存储策略 A+B：邮箱已送达（sent）→ 本地只存片②（片③在邮箱，三处分布）；
+    //    skipped/无邮箱 → 本地存 2 片（显著警告，用户自担）
+    const emailed = backupStatus === 'sent'
+    const localCodes = emailed ? [recoveryCodes[0]] : recoveryCodes
+    const recoveryFileWritten = await saveRecoveryCodes(localCodes, emailed)
+    let mnemonicFileWritten: string | undefined
+    if (mnemonic) {
+      mnemonicFileWritten = await saveMnemonic(entropyToMnemonic(entropy)) // O4A: 熵→标准 24 词
+    }
+
+    // 3. 原子落盘 + 回滚（失败时清理全部已写文件——含明文恢复码/助记词=私钥材料）
+    try {
+      await fs.mkdir(getHomeDir(), { recursive: true })
+      await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
+      await fs.writeFile(deviceFile(), JSON.stringify({ version: 2, share: enc }, null, 2), { mode: 0o600 })
+    } catch (err) {
+      await fs.rm(metaFile(), { force: true })
+      await fs.rm(deviceFile(), { force: true })
+      // 失败回滚用普通删除而非 secureDelete：文件刚写入未持久化，且
+      // secureDelete 在 APFS/SSD（CoW）上同样无法保证物理抹除——普通删除足够
+      await fs.rm(recoveryFileWritten, { force: true }) // 明文恢复码（2 片=私钥）
+      if (mnemonicFileWritten) await fs.rm(mnemonicFileWritten, { force: true }) // 助记词=完整私钥
+      throw err
+    }
+
+    return {
+      address,
+      recoveryCodes,
+      backupEmail: email,
+      backupStatus,
+      recoveryFile: recoveryFileWritten,
+      mnemonicFile: mnemonicFileWritten,
+      note: mnemonic
+        ? '助记词已生成（=完整私钥，单点）：请抄写并安全保管，勿拍照/截图/网络传输；建议抄写离线保存后执行 wipe 删除本机明文备份'
+        : undefined,
+    }
   } finally {
     privateKey.fill(0) // 派生私钥清零
     entropy.fill(0) // O4A: 根熵清零（=私钥材料）
     for (const s of shares) s.bytes.fill(0) // 不变式 5：明文分片一并清零（任意 2 片=熵）
-  }
-
-  return {
-    address,
-    recoveryCodes,
-    backupEmail: email,
-    backupStatus,
-    recoveryFile: recoveryFileWritten,
-    mnemonicFile: mnemonicFileWritten,
-    note: mnemonic
-      ? '助记词已生成（=完整私钥，单点）：请抄写并安全保管，勿拍照/截图/网络传输；建议抄写离线保存后执行 wipe 删除本机明文备份'
-      : undefined,
   }
 }
 
@@ -267,7 +275,7 @@ export async function restoreFromMnemonic(
     const result = await createWalletFromEntropy(passphrase, entropy, email, false)
     return {
       ...result,
-      note: '已从助记词重建分片体系（2-of-3）；⚠️ 请妥善保存新恢复码；旧恢复码/旧邮箱备份片仍可重组同一私钥——请作废销毁并删除旧邮件；原助记词仍可恢复（单点，建议销毁或严格保管）',
+      note: '已从助记词重建分片体系（2-of-3）；⚠️ 请妥善保存新恢复码；旧恢复码/旧邮箱备份片仍可重组同一私钥——请作废销毁并删除旧邮件；原助记词仍可恢复（单点，建议销毁或严格保管）。注意：本版本起助记词为标准 BIP-39/44 语义（熵→m/44\'/60\'/0\'/0/0 派生）——旧版本生成的助记词（私钥直接编码）在新版本下无法恢复同一地址，请用旧版本软件或恢复码恢复',
     }
   } finally {
     entropy.fill(0) // O4A: 根熵清零（所有路径）
