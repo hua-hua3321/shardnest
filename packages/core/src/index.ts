@@ -1,4 +1,4 @@
-export { privateKeyToMnemonic, mnemonicToPrivateKey, isLikelyMnemonic } from './mnemonic'
+export { entropyToMnemonic, mnemonicToEntropy, mnemonicToSeed, derivePrivateKeyFromSeed, derivePrivateKeyFromMnemonic, derivePrivateKeyFromEntropy, isLikelyMnemonic, BIP44_PATH } from './mnemonic'
 export {
   splitSecret,
   combineShares,
@@ -12,6 +12,7 @@ export {
   privateKeyToAddress,
   toChecksumAddress,
   generateKeyPair,
+  generateEntropy,
   deriveKEK, kdfParamsOf, SCRYPT_OPTS,
   type KeyPair,
   type KdfParams,

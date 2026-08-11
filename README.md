@@ -77,7 +77,7 @@ All commands are interactive (passphrases & recovery codes are masked input).
 ### Mnemonic (optional, default off)
 
 - Only **24 words** are supported: 12 words carry 128 bits < 256-bit private key (capacity constraint).
-- **shardnest-proprietary encoding** (private key used directly as BIP-39 entropy; NO standard seed→BIP-32 derivation) — these words are **NOT compatible with MetaMask / Ledger / Trust Wallet** (importing yields a different address). Use them only inside shardnest.
+- **Standard BIP-39/44 semantics**: wallet root = 32-byte entropy (protected by 2-of-3 shares); the 24 words are the entropy's standard BIP-39 encoding and derive the account key via `m/44'/60'/0'/0/0` — **importable into MetaMask / Ledger / Trust Wallet for the same address**. Exportable anytime from any 2 shares.
 - A mnemonic **equals the full private key (single point)** — leak = funds lost, no threshold protection. Store offline (paper/password manager), then run `wipe` (scope 1) to remove the local plaintext copy.
 - Generated on `init` (opt-in) or exported anytime via `mnemonic-export` (any 2 of 3 shares); recovered via `restore-mnemonic`.
 

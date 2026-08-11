@@ -1,39 +1,66 @@
 /**
- * BIP-39 助记词（可选备份通道，默认关闭）
+ * BIP-39/44 标准化助记词（O4A：熵为根）
  *
- * 语义：助记词 = 完整私钥的备份（与 2-of-3 分片体系并存、独立）。
- * - 24 词：承载 256 位熵 = 32 字节私钥（12 词仅 128 位，无法承载完整私钥，
- *   故不支持——密码学容量约束，非产品取舍）
- * - 单凭 24 词即可恢复钱包（绕过门限）；但这是**单点**：泄露即资金丢失，
- *   与「分片单份零信息量」的安全保证不同——生成时必须向用户披露
+ * 钱包根 = 32 字节熵（CSPRNG）→ BIP-39 24 词（可逆编码）→ seed(PBKDF2-2048)
+ * → BIP-32 HDKey → m/44'/60'/0'/0/0 派生账户私钥（单向）。
  *
- * 用法：
- *   privateKeyToMnemonic(priv)      → 24 词
- *   mnemonicToPrivateKey(words)     → 私钥（校验和校验，篡改/抄错即拒绝）
+ * 与旧版（私钥直接作熵）的区别：分片对象是**熵**而非私钥——
+ * 任意 2 片恢复码重组熵后既可派生私钥（签名），也可导出助记词（备份），
+ * 且 24 词可导入 MetaMask 等标准钱包得到同一地址。
  */
+import { entropyToMnemonic as b39EntropyToMnemonic, mnemonicToEntropy as b39MnemonicToEntropy, mnemonicToSeedSync } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english'
-import { entropyToMnemonic, mnemonicToEntropy, validateMnemonic } from '@scure/bip39'
+import { HDKey } from '@scure/bip32'
 
-/** 私钥 → 24 词助记词（BIP-39 标准：256 位熵 + 8 位校验） */
-export function privateKeyToMnemonic(privateKey: Uint8Array): string {
-  if (privateKey.length !== 32) throw new Error('助记词仅支持 32 字节（256 位）私钥')
-  return entropyToMnemonic(privateKey, wordlist)
+/** 派生路径：EVM 标准账户路径 */
+export const BIP44_PATH = "m/44'/60'/0'/0/0"
+
+/** 熵 → BIP-39 24 词（标准可逆编码；@scure/bip39 保证校验和） */
+export function entropyToMnemonic(entropy: Uint8Array): string {
+  if (entropy.length !== 32) throw new Error('熵必须为 32 字节（256 位）')
+  return b39EntropyToMnemonic(entropy, wordlist)
 }
 
-/**
- * 24 词助记词 → 私钥
- * @throws 词数/词表/校验和不符（抄错、篡改即拒绝）
- */
-export function mnemonicToPrivateKey(mnemonic: string): Uint8Array {
-  const normalized = mnemonic.trim().toLowerCase().split(/\s+/).join(' ')
-  if (!validateMnemonic(normalized, wordlist)) {
-    throw new Error('助记词无效（词数/词表/校验和错误），请核对后重试')
+/** 24 词 → 熵（校验和校验，篡改/抄错即拒绝；12 词 128 位容量不足会报错） */
+export function mnemonicToEntropy(mnemonic: string): Uint8Array {
+  try {
+    return b39MnemonicToEntropy(mnemonic.trim(), wordlist)
+  } catch {
+    throw new Error('助记词无效（校验和错误或词表不符）——请核对后重试')
   }
-  return new Uint8Array(mnemonicToEntropy(normalized, wordlist))
 }
 
-/** 助记词格式预校验（长度与基本形态，供 UI 早失败） */
-export function isLikelyMnemonic(input: string): boolean {
-  const words = input.trim().split(/\s+/)
-  return words.length === 24 && words.every((w) => wordlist.includes(w.toLowerCase()))
+/** 助记词 → seed（BIP-39 PBKDF2-HMAC-SHA512 2048 轮） */
+export function mnemonicToSeed(mnemonic: string): Uint8Array {
+  return mnemonicToSeedSync(mnemonic.trim(), '')
+}
+
+/** seed → BIP-32 账户私钥（m/44'/60'/0'/0/0） */
+export function derivePrivateKeyFromSeed(seed: Uint8Array): Uint8Array {
+  const hd = HDKey.fromMasterSeed(seed)
+  const child = hd.derive(BIP44_PATH)
+  if (!child.privateKey) throw new Error('BIP-32 派生失败（无私钥）')
+  return child.privateKey
+}
+
+/** 助记词 → 账户私钥（全链派生） */
+export function derivePrivateKeyFromMnemonic(mnemonic: string): Uint8Array {
+  return derivePrivateKeyFromSeed(mnemonicToSeed(mnemonic))
+}
+
+/** 熵 → 账户私钥（init/签名共用入口） */
+export function derivePrivateKeyFromEntropy(entropy: Uint8Array): Uint8Array {
+  return derivePrivateKeyFromMnemonic(entropyToMnemonic(entropy))
+}
+
+/** 粗略判断是否为 BIP-39 助记词（长度 + 词表校验和） */
+export function isLikelyMnemonic(mnemonic: string): boolean {
+  const words = mnemonic.trim().split(/\s+/)
+  if (words.length !== 24) return false
+  try {
+    b39MnemonicToEntropy(words.join(' '), wordlist)
+    return true
+  } catch {
+    return false
+  }
 }

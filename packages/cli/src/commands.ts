@@ -25,7 +25,7 @@ import { gcm } from '@noble/ciphers/aes'
 import { sendBackupShare } from './mailer'
 import { createUnlockSession, getUnlockDir } from '@wallet-service/signer'
 import { randomBytes } from '@noble/hashes/utils'
-import { privateKeyToMnemonic, mnemonicToPrivateKey } from '@wallet-service/core'
+import { entropyToMnemonic, mnemonicToEntropy, generateEntropy } from '@wallet-service/core'
 
 /** 钱包目录（动态读取 env，便于测试隔离） */
 export function getHomeDir(): string {
@@ -174,20 +174,22 @@ export async function initWallet(passphrase: string, email?: string, mnemonic = 
       `钱包已存在（地址 ${existing}）。如需重新创建请先执行 wipe，或用 restore 恢复；强制覆盖需传 force=true（旧钱包若未备份恢复码，资金将永久丢失）`
     )
   }
-  const { privateKey, address } = generateKeyPair()
-  return createWalletFromPrivateKey(passphrase, privateKey, email, mnemonic)
+  const entropy = generateEntropy() // O4A: 钱包根=熵（分片对象；私钥为派生）
+  return createWalletFromEntropy(passphrase, entropy, email, mnemonic)
 }
 
-/** 从既定私钥建钱包（init 与助记词恢复共用；调用方负责 privateKey 清零） */
-async function createWalletFromPrivateKey(
+/** 从既定熵建钱包（init/恢复码恢复/助记词恢复共用；调用方负责 entropy 清零）
+ * O4A: 分片对象=熵（32 字节）——任意 2 片可导出助记词，也可派生私钥签名 */
+async function createWalletFromEntropy(
   passphrase: string,
-  privateKey: Uint8Array,
+  entropy: Uint8Array,
   email?: string,
   mnemonic = false,
 ): Promise<InitResult> {
-  const { privateKeyToAddress } = await import('@wallet-service/core')
+  const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+  const privateKey = derivePrivateKeyFromEntropy(entropy) // BIP-39/44 派生
   const address = privateKeyToAddress(privateKey)
-  const shares = splitSecret(privateKey, { shares: 3, threshold: 2 })
+  const shares = splitSecret(entropy, { shares: 3, threshold: 2 })
   const enc = await encryptShare(shares[0], passphrase)
   const recoveryCodes = [shares[1], shares[2]].map(encodeRecoveryCode)
 
@@ -209,7 +211,7 @@ async function createWalletFromPrivateKey(
   const recoveryFileWritten = await saveRecoveryCodes(localCodes, emailed)
   let mnemonicFileWritten: string | undefined
   if (mnemonic) {
-    mnemonicFileWritten = await saveMnemonic(privateKeyToMnemonic(privateKey))
+    mnemonicFileWritten = await saveMnemonic(entropyToMnemonic(entropy)) // O4A: 熵→标准 24 词
   }
 
   // 3. 原子落盘 + 回滚（失败时清理全部已写文件——含明文恢复码/助记词=私钥材料）
@@ -226,8 +228,9 @@ async function createWalletFromPrivateKey(
     if (mnemonicFileWritten) await fs.rm(mnemonicFileWritten, { force: true }) // 助记词=完整私钥
     throw err
   } finally {
-    privateKey.fill(0) // 所有路径（成功/异常）均清零
-    for (const s of shares) s.bytes.fill(0) // 不变式 5：明文分片一并清零（任意 2 片=私钥）
+    privateKey.fill(0) // 派生私钥清零
+    entropy.fill(0) // O4A: 根熵清零（=私钥材料）
+    for (const s of shares) s.bytes.fill(0) // 不变式 5：明文分片一并清零（任意 2 片=熵）
   }
 
   return {
@@ -251,23 +254,23 @@ export async function restoreFromMnemonic(
   email?: string,
 ): Promise<InitResult> {
   validatePassphrase(passphrase)
-  const privateKey = mnemonicToPrivateKey(mnemonic)
+  const entropy = mnemonicToEntropy(mnemonic) // O4A: 标准 24 词 → 熵（校验和校验）
   try {
-    const { privateKeyToAddress } = await import('@wallet-service/core')
-    const address = privateKeyToAddress(privateKey)
+    const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+    const address = privateKeyToAddress(derivePrivateKeyFromEntropy(entropy))
 
     const want = expectedAddress ?? (await readOldAddress())
     if (want && want.toLowerCase() !== address.toLowerCase()) {
       throw new Error(`助记词恢复出的地址 (${address}) 与目标地址 (${want}) 不一致——助记词可能抄错，操作已中止`)
     }
 
-    const result = await createWalletFromPrivateKey(passphrase, privateKey, email, false)
+    const result = await createWalletFromEntropy(passphrase, entropy, email, false)
     return {
       ...result,
       note: '已从助记词重建分片体系（2-of-3）；⚠️ 请妥善保存新恢复码；旧恢复码/旧邮箱备份片仍可重组同一私钥——请作废销毁并删除旧邮件；原助记词仍可恢复（单点，建议销毁或严格保管）',
     }
   } finally {
-    privateKey.fill(0) // 所有路径（成功/异常）均清零
+    entropy.fill(0) // O4A: 根熵清零（所有路径）
   }
 }
 
@@ -283,14 +286,20 @@ export async function signMessage(passphrase: string, recoveryCode: string, mess
   const share1 = await decryptShare(enc.share, passphrase)
   const share2 = decodeRecoveryCode(recoveryCode)
   const { WalletVault } = await import('@wallet-service/signer')
+  const { derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
   const vault = new WalletVault()
+  const entropy = combineShares([share1, share2]) // O4A: 重组根熵
+  let privateKey: Uint8Array | null = null
   try {
-    vault.unlock([share1, share2])
+    privateKey = derivePrivateKeyFromEntropy(entropy) // BIP-39/44 派生
+    vault.unlockPrivateKey(privateKey) // O4A: 组合/派生已在命令层完成
     const sig = vault.signMessage(new TextEncoder().encode(message))
     const addr = vault.getAddress()
     return JSON.stringify({ address: addr, signature: Buffer.from(sig).toString('hex') })
   } finally {
     vault.wipe() // 异常路径也清零 vault 内组合私钥
+    privateKey?.fill(0)
+    entropy.fill(0) // 根熵清零
     share1.bytes.fill(0)
     share2.bytes.fill(0)
   }
@@ -312,14 +321,16 @@ export async function restoreWallet(
   const shares = recoveryCodes.map(decodeRecoveryCode)
   const fresh = reshareShares(shares, { shares: 3, threshold: 2 })
   const enc = await encryptShare(fresh[0], passphrase)
-  const privateKey = combineShares([fresh[0], fresh[1]])
-  const { privateKeyToAddress } = await import('@wallet-service/core')
+  const entropy = combineShares([fresh[0], fresh[1]]) // O4A: 重组根熵
+  const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+  const privateKey = derivePrivateKeyFromEntropy(entropy) // BIP-39/44 派生
   const address = privateKeyToAddress(privateKey)
 
   // 地址交叉校验：期望地址 or 旧 metadata 地址
   const want = expectedAddress ?? (await readOldAddress())
   if (want && want.toLowerCase() !== address.toLowerCase()) {
     privateKey.fill(0)
+    entropy.fill(0)
     throw new Error(`恢复出的地址 (${address}) 与目标地址 (${want}) 不一致——恢复码可能输错，操作已中止`)
   }
 
@@ -330,6 +341,7 @@ export async function restoreWallet(
   if (email) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       privateKey.fill(0)
+      entropy.fill(0)
       throw new Error('邮箱格式无效')
     }
     backupStatus = await sendBackupShare(email, address, newCodes[1])
@@ -351,6 +363,7 @@ export async function restoreWallet(
     throw err
   } finally {
     privateKey.fill(0)
+    entropy.fill(0) // O4A: 根熵清零
     for (const s of [...shares, ...fresh]) s.bytes.fill(0) // 不变式 5：输入 2 片 + 新 3 片一并清零
   }
 
@@ -392,28 +405,26 @@ export async function exportMnemonicFromCodes(recoveryCode1: string, recoveryCod
   return exportMnemonicFromShares([decodeRecoveryCode(recoveryCode1), decodeRecoveryCode(recoveryCode2)])
 }
 
-/** 共享实现：组合私钥 → 助记词落盘；地址与本地 metadata 交叉校验防错组合 */
+/** 共享实现：组合根熵 → 助记词落盘；地址与本地 metadata 交叉校验防错组合 */
 async function exportMnemonicFromShares(shares: Share[]): Promise<{ mnemonicFile: string; address: string }> {
-  const { WalletVault } = await import('@wallet-service/signer')
-  const vault = new WalletVault()
+  const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+  const entropy = combineShares(shares) // O4A: 重组根熵
   let mnemonicFile: string
   let address: string
   try {
-    vault.unlock(shares) // 私钥范围校验（0<priv<n），防静默坏组合
-    address = vault.getAddress()
-    const want = await readOldAddress()
-    if (want && want.toLowerCase() !== address.toLowerCase()) {
-      throw new Error(`组合出的地址 (${address}) 与本地钱包 (${want}) 不一致——恢复码可能输错，操作已中止`)
-    }
-    // 私钥已解锁但 WalletVault 不暴露私钥——用组合路径再拿一次（组合后立即清零）
-    const privateKey = combineShares(shares)
+    const privateKey = derivePrivateKeyFromEntropy(entropy) // BIP-39/44 派生
     try {
-      mnemonicFile = await saveMnemonic(privateKeyToMnemonic(privateKey))
+      address = privateKeyToAddress(privateKey)
+      const want = await readOldAddress()
+      if (want && want.toLowerCase() !== address.toLowerCase()) {
+        throw new Error(`组合出的地址 (${address}) 与本地钱包 (${want}) 不一致——恢复码可能输错，操作已中止`)
+      }
+      mnemonicFile = await saveMnemonic(entropyToMnemonic(entropy)) // 熵↔助记词可逆，任意 2 片随时导出
     } finally {
       privateKey.fill(0)
     }
   } finally {
-    vault.wipe()
+    entropy.fill(0)
     for (const s of shares) s.bytes.fill(0)
   }
   return { mnemonicFile, address }
@@ -425,10 +436,11 @@ export async function createUnlockToken(passphrase: string, recoveryCode: string
   const share1 = await decryptShare(enc.share, passphrase)
   const share2 = decodeRecoveryCode(recoveryCode)
   let privateKey: Uint8Array | null = null
+  const entropy = combineShares([share1, share2]) // O4A: 重组根熵
   try {
-    privateKey = combineShares([share1, share2])
+    const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+    privateKey = derivePrivateKeyFromEntropy(entropy) // BIP-39/44 派生
     // 地址交叉校验：防止输错恢复码生成「垃圾私钥」令牌（签名被拒且用户不知原因）
-    const { privateKeyToAddress } = await import('@wallet-service/core')
     const want = await readOldAddress()
     if (want && privateKeyToAddress(privateKey).toLowerCase() !== want.toLowerCase()) {
       throw new Error('组合出的地址与本地钱包不一致——恢复码可能输错，操作已中止')
@@ -436,6 +448,7 @@ export async function createUnlockToken(passphrase: string, recoveryCode: string
     return await createUnlockSession(privateKey)
   } finally {
     privateKey?.fill(0) // 异常路径也清零
+    entropy.fill(0) // 根熵清零
     share1.bytes.fill(0)
     share2.bytes.fill(0)
   }
