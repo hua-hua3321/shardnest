@@ -138,8 +138,8 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     // 默认不生成
     const plain = await initWallet(PASSPHRASE)
     expect(plain.mnemonicFile).toBeUndefined()
-    // 显式生成
-    const withM = await initWallet(PASSPHRASE, undefined, true)
+    // 显式生成（覆盖上一钱包，测试意图）
+    const withM = await initWallet(PASSPHRASE, undefined, true, true)
     expect(withM.mnemonicFile).toBeTruthy()
     const fileContent = await fs.readFile(withM.mnemonicFile!, 'utf8')
     const mnemonic = fileContent.split('\n').find((l) => l.trim().split(/\s+/).length === 24)!.trim()
@@ -180,7 +180,7 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
 
   it('导出助记词：错误恢复码 → 地址不一致拒绝', async () => {
     const a = await initWallet(PASSPHRASE)
-    const b = await initWallet(PASSPHRASE)
+    const b = await initWallet(PASSPHRASE, undefined, false, true)
     await expect(
       exportMnemonicFromCodes(a.recoveryCodes[0], b.recoveryCodes[1]),
     ).rejects.toThrow(/不一致/)
@@ -223,6 +223,20 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(out.address).toBe(result.address)
   })
 
+  it('W9：已有钱包时 initWallet 拒绝（防静默覆盖）；force=true 可覆盖', async () => {
+    await initWallet(PASSPHRASE)
+    await expect(initWallet(PASSPHRASE)).rejects.toThrow(/钱包已存在/)
+    // force=true 允许覆盖（显式意图）
+    const r = await initWallet(PASSPHRASE, undefined, false, true)
+    expect(r.address).toBeTruthy()
+  })
+
+  it('I10：错误口令解密 → 友好错误（非库原始异常）', async () => {
+    const r = await initWallet(PASSPHRASE)
+    await expect(signMessage('wrong-passphrase-999!', r.recoveryCodes[0], 'm')).rejects.toThrow(/口令错误/)
+    await expect(createUnlockToken('wrong-passphrase-999!', r.recoveryCodes[0])).rejects.toThrow(/口令错误/)
+  })
+
   it('原子性回滚：device 写入失败时 recovery-codes.txt 与 mnemonic.txt 一并清理（C1）', async () => {
     // 先正常建一个带助记词的钱包（制造 mnemonic.txt）
     const ok = await initWallet(PASSPHRASE, undefined, true)
@@ -245,7 +259,7 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     try {
       fail = true
       // 新口令 + 助记词——必须与旧钱包无关；这里仅验证回滚语义
-      await expect(initWallet('another-passphrase-456!', undefined, true)).rejects.toThrow('disk full')
+      await expect(initWallet('another-passphrase-456!', undefined, true, true)).rejects.toThrow('disk full')
     } finally {
       fail = false
       fs.writeFile = realWriteFile

@@ -87,6 +87,16 @@ async function main() {
       break
     }
     case 'init': {
+      // W9: 已有钱包时警告 + 确认（防止误覆盖导致旧钱包资金永久丢失）
+      const existingAddr = await getAddress().catch(() => null)
+      if (existingAddr) {
+        console.log('\n⚠️  ' + t(`已检测到钱包（${existingAddr}）。继续将生成全新钱包并覆盖设备分片——旧钱包若未备份恢复码，资金将永久丢失。`, `Wallet detected (${existingAddr}). Continuing creates a NEW wallet and overwrites the device share — if the old wallet's recovery codes were not saved, its funds are permanently lost.`))
+        const ok = await prompt(t('确认重新创建？输入 yes 继续: ', 'Confirm recreate? type yes: '))
+        if (ok.toLowerCase() !== 'yes') {
+          console.log(t('已取消', 'Cancelled'))
+          break
+        }
+      }
       const passphrase = await promptSecret(t('设置口令（>=12 位，用于加密设备分片）: ', "Set passphrase (>=12 chars, encrypts device share): "))
       const email = await prompt(t('邮箱（可选，自动发送备份分片——注意：邮件商可看到该明文分片（单片零信息量），回车跳过）: ', "Email (optional, auto-sends backup share — note: the mail provider can see this plaintext share (single share = zero info); Enter to skip): "))
       console.log('\n' + t('是否生成 24 词助记词备份？（默认不生成）', "Generate a 24-word mnemonic backup? (default: No)"))

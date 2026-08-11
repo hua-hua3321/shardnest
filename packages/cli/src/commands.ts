@@ -135,7 +135,13 @@ async function decryptShare(enc: { data: string; salt: string }, passphrase: str
   const nonce = Uint8Array.from(Buffer.from(nonceB64, 'base64'))
   const ct = Uint8Array.from(Buffer.from(ctB64, 'base64'))
   const cipher = gcm(kek, nonce)
-  const payload = cipher.decrypt(ct)
+  let payload: Uint8Array
+  try {
+    payload = cipher.decrypt(ct)
+  } catch {
+    // I10: AES-GCM 认证失败 = 口令错误或分片损坏——给用户可操作的提示而非库原始错误
+    throw new Error('口令错误，或设备分片已损坏——请核对口令后重试')
+  }
   return { index: payload[0], bytes: payload.slice(1) }
 }
 
@@ -151,8 +157,15 @@ export function validatePassphrase(passphrase: string): void {
  * mnemonic=true 时：同步生成 24 词助记词（完整私钥备份，可单独恢复；默认关闭）
  * 原子性：先完成所有可失败操作（邮件/恢复码/助记词落盘）→ 最后落盘，失败不留下半成品
  */
-export async function initWallet(passphrase: string, email?: string, mnemonic = false): Promise<InitResult> {
+export async function initWallet(passphrase: string, email?: string, mnemonic = false, force = false): Promise<InitResult> {
   validatePassphrase(passphrase)
+  // W9: 防静默覆盖——已有钱包时默认拒绝（旧钱包未备份恢复码即永久丢失）
+  const existing = await readOldAddress()
+  if (existing !== undefined && !force) {
+    throw new Error(
+      `钱包已存在（地址 ${existing}）。如需重新创建请先执行 wipe，或用 restore 恢复；强制覆盖需传 force=true（旧钱包若未备份恢复码，资金将永久丢失）`
+    )
+  }
   const { privateKey, address } = generateKeyPair()
   return createWalletFromPrivateKey(passphrase, privateKey, email, mnemonic)
 }

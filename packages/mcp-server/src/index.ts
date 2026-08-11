@@ -65,7 +65,7 @@ export function createShardnestServer(
       let passphrase = await consumePassphraseSession(passphrase_token)
       let result: Awaited<ReturnType<typeof initWallet>>
       try {
-        result = await initWallet(passphrase, email, generate_mnemonic === true)
+        result = await initWallet(passphrase, email, generate_mnemonic === true, false) // W9: 已有钱包时拒绝（防静默覆盖）
       } finally {
         // JS string 不可变；置空引用提示 GC 尽早回收
         passphrase = ''
