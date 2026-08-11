@@ -15,7 +15,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { verifySignedRequest, type SignedRequest } from '@wallet-service/protocol'
 import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile } from '@wallet-service/cli'
-import { defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession } from '@wallet-service/signer'
+import { defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession, consumePassphraseSession } from '@wallet-service/signer'
 
 export const PLATFORM_ADDRESS = process.env.SHARDNEST_PLATFORM_ADDRESS ?? ''
 
@@ -27,9 +27,17 @@ export function createShardnestServer(
 
   server.tool(
     'wallet_create',
-    { passphrase: z.string().min(12), email: z.string().email().optional() },
-    async ({ passphrase, email }) => {
-      const result = await initWallet(passphrase, email)
+    { passphrase_token: z.string(), email: z.string().email().optional() },
+    async ({ passphrase_token, email }) => {
+      // 口令经本地口令令牌消费（CLI passphrase-token 生成；口令明文不进 LLM）
+      let passphrase = await consumePassphraseSession(passphrase_token)
+      let result: Awaited<ReturnType<typeof initWallet>>
+      try {
+        result = await initWallet(passphrase, email)
+      } finally {
+        // JS string 不可变；置空引用提示 GC 尽早回收
+        passphrase = ''
+      }
       return {
         content: [{
           type: 'text' as const,
@@ -116,14 +124,15 @@ export function createShardnestServer(
   server.tool(
     'wallet_restore',
     {
-      // 凭证隔离：恢复码经本地文件路径交付（内容不进 LLM）；口令为新设口令（无本地文件不可用）
+      // 凭证隔离：恢复码经本地文件路径交付（内容不进 LLM）；口令经口令令牌（明文不进 LLM）
       recovery_file_path: z.string().optional(),
-      passphrase: z.string().min(12),
+      passphrase_token: z.string(),
       expected_address: z.string().regex(/^0x[0-9a-fA-F]{40}$/, '期望地址格式无效').optional(),
       email: z.string().email().optional(),
     },
-    async ({ recovery_file_path, passphrase, expected_address, email }) => {
+    async ({ recovery_file_path, passphrase_token, expected_address, email }) => {
       try {
+        const passphrase = await consumePassphraseSession(passphrase_token)
         const codes = await readRecoveryCodesFromFile(recovery_file_path)
         const result = await restoreWallet(
           passphrase,

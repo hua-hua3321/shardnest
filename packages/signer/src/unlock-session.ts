@@ -24,19 +24,27 @@ export function getUnlockDir(): string {
   return path.join(process.env.SHARDNEST_HOME ?? path.join(process.env.HOME ?? '.', '.shardnest'), 'unlock')
 }
 
+/** 会话类型：unlock=私钥解锁 / passphrase=创建或恢复口令（均单次 + TTL） */
+export type SessionType = 'unlock' | 'passphrase'
+
+function sessionPrefix(type: SessionType): string {
+  return type === 'unlock' ? 'unlock' : 'passphrase'
+}
+
 /**
- * 创建解锁会话：私钥用 token 派生 KEK 加密落盘，返回 token。
- * @param privateKey 组合出的私钥（调用方负责清零）
+ * 创建会话：敏感材料用 token 派生 KEK 加密落盘（0600），返回 token。
+ * @param material 敏感字节（私钥或口令编码；调用方负责清零）
+ * @param type 会话类型（决定文件前缀，隔离语义）
  */
-export async function createUnlockSession(privateKey: Uint8Array): Promise<string> {
+export async function createUnlockSession(material: Uint8Array, type: SessionType = 'unlock'): Promise<string> {
   const token = bytesToHex(randomBytes(32))
   const kek = sha256(new TextEncoder().encode(token))
   const nonce = randomBytes(12)
   const cipher = gcm(kek, nonce)
-  const ct = cipher.encrypt(privateKey)
+  const ct = cipher.encrypt(material)
   const dir = getUnlockDir()
   await fs.mkdir(dir, { recursive: true })
-  const file = path.join(dir, `unlock-${token.slice(0, 16)}.bin`)
+  const file = path.join(dir, `${sessionPrefix(type)}-${token.slice(0, 16)}.bin`) // 8 字节熵前缀，防本地枚举
   await fs.writeFile(
     file,
     JSON.stringify({ v: 1, nonce: Buffer.from(nonce).toString('base64'), ct: Buffer.from(ct).toString('base64') }),
@@ -45,17 +53,23 @@ export async function createUnlockSession(privateKey: Uint8Array): Promise<strin
   return token
 }
 
+/** 创建口令会话（口令编码为 UTF-8 字节；MCP 侧消费后必须清零） */
+export function createPassphraseSession(passphrase: string): Promise<string> {
+  const bytes = new TextEncoder().encode(passphrase)
+  return createUnlockSession(bytes, 'passphrase')
+}
+
 /**
  * 消费解锁会话：验证 TTL → 解密私钥 → 删除文件（单次使用）。
  * @returns 私钥（调用方签名后必须 wipe/清零）
  */
-export async function consumeUnlockSession(token: string): Promise<Uint8Array> {
+export async function consumeUnlockSession(token: string, type: SessionType = 'unlock'): Promise<Uint8Array> {
   if (!/^[0-9a-f]{64}$/.test(token)) throw new Error('解锁令牌格式无效')
   const dir = getUnlockDir()
-  const file = path.join(dir, `unlock-${token.slice(0, 16)}.bin`)
+  const file = path.join(dir, `${sessionPrefix(type)}-${token.slice(0, 16)}.bin`)
   // 原子消费（TOCTOU 防护）：先 rename 到消费中文件（原子操作），
   // 并发第二个消费方 rename 失败 → 单次语义严格成立
-  const consuming = path.join(dir, `consuming-${token.slice(0, 16)}.bin`)
+  const consuming = path.join(dir, `consuming-${sessionPrefix(type)}-${token.slice(0, 16)}.bin`)
   try {
     await fs.rename(file, consuming)
   } catch {
@@ -74,4 +88,12 @@ export async function consumeUnlockSession(token: string): Promise<Uint8Array> {
   } finally {
     await fs.rm(consuming, { force: true })
   }
+}
+
+/** 消费口令会话 → 返回口令明文（用后请立即脱离作用域） */
+export async function consumePassphraseSession(token: string): Promise<string> {
+  const bytes = await consumeUnlockSession(token, 'passphrase')
+  const passphrase = new TextDecoder().decode(bytes)
+  bytes.fill(0)
+  return passphrase
 }

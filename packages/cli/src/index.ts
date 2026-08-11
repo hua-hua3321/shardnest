@@ -10,6 +10,7 @@
  */
 import * as readline from 'node:readline'
 import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken } from './commands'
+import { createPassphraseSession } from '@wallet-service/signer'
 
 async function prompt(question: string): Promise<string> {
   process.stdout.write(question)
@@ -38,6 +39,15 @@ function promptSecret(question: string): Promise<string> {
 async function main() {
   const [cmd, ...args] = process.argv.slice(2)
   switch (cmd) {
+    case 'passphrase-token': {
+      // 本地输入口令 → 生成短期单次口令令牌（MCP wallet_create/restore 用，口令不进 LLM）
+      const passphrase = await promptSecret('口令（>=12 位）: ')
+      if (passphrase.length < 12) throw new Error('口令至少 12 位')
+      const token = await createPassphraseSession(passphrase)
+      console.log('\n🔑 口令令牌（5 分钟有效，单次使用，请勿在聊天中转发）:')
+      console.log(token)
+      break
+    }
     case 'unlock': {
       const passphrase = await promptSecret('口令: ')
       const code = await prompt('恢复码: ')
@@ -88,7 +98,7 @@ async function main() {
       break
     }
     default:
-      console.log('用法: shardnest [init|address|unlock|sign|restore]')
+      console.log('用法: shardnest [init|address|passphrase-token|unlock|sign|restore]')
   }
 }
 

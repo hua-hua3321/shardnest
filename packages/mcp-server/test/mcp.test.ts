@@ -9,6 +9,7 @@ import { issueSignedRequest } from '@wallet-service/protocol'
 import { generatePrivateKey, privateKeyToAddress } from '@wallet-service/core'
 import { recoverSigner } from '@wallet-service/verify-sdk'
 import { createUnlockToken } from '@wallet-service/cli'
+import { createPassphraseSession } from '@wallet-service/signer'
 
 const TEST_HOME = path.join(process.cwd(), '.test-shardnest-mcp')
 
@@ -21,9 +22,10 @@ const platformPriv = generatePrivateKey()
 const platformAddr = privateKeyToAddress(platformPriv)
 const PASSPHRASE = 'mcp-passphrase-123!'
 
-/** 创建钱包并返回（地址 + 从本地文件读取的恢复码） */
+/** 创建钱包并返回（地址 + 从本地文件读取的恢复码）；口令经口令令牌传递（不进 LLM） */
 async function createWallet(client: Client, passphrase: string, email?: string) {
-  const res = await client.callTool({ name: 'wallet_create', arguments: { passphrase, email } })
+  const token = await createPassphraseSession(passphrase)
+  const res = await client.callTool({ name: 'wallet_create', arguments: { passphrase_token: token, email } })
   const data = JSON.parse((res.content[0] as { text: string }).text)
   const fileContent = await fs.readFile(path.join(getHomeDir(), 'recovery-codes.txt'), 'utf8')
   const recoveryCodes = fileContent.split('\n').filter((l) => l.startsWith('sn1-'))
@@ -75,7 +77,7 @@ describe('shardnest MCP 薄壳', () => {
     const res = await client.callTool({
       name: 'wallet_restore',
       arguments: {
-        passphrase: PASSPHRASE,
+        passphrase_token: await createPassphraseSession(PASSPHRASE),
         expected_address: created.address,
       },
     })
@@ -97,7 +99,7 @@ describe('shardnest MCP 薄壳', () => {
     const res = await client.callTool({
       name: 'wallet_restore',
       arguments: {
-        passphrase: PASSPHRASE,
+        passphrase_token: await createPassphraseSession(PASSPHRASE),
         expected_address: '0x0000000000000000000000000000000000000000',
       },
     })
@@ -105,12 +107,13 @@ describe('shardnest MCP 薄壳', () => {
     expect(out.error).toBe('RESTORE_FAILED')
   })
 
-  it('wallet_create 口令 <12 位 → 拒绝（与 CLI 强度一致）', async () => {
+  it('wallet_create 无效口令令牌 → 错误（口令令牌单次/过期防护）', async () => {
     const client = await connect()
-    const res = await client.callTool({ name: 'wallet_create', arguments: { passphrase: 'short8' } })
+    const res = await client.callTool({ name: 'wallet_create', arguments: { passphrase_token: '0'.repeat(64) } })
+    // MCP SDK 将 handler 异常转为 isError + 错误文本
+    expect(res.isError).toBe(true)
     const text = res.content[0] as { type: string; text: string }
-    // zod 校验失败由 MCP 层返回错误（isError 或错误文本）
-    expect(text.text.includes('short8') || text.text.includes('Invalid') || text.text.includes('too_small')).toBe(true)
+    expect(text.text.includes('不存在') || text.text.includes('已被使用')).toBe(true)
   })
 
   it('signed_request_sign：平台背书 → 确认 → 返回可验签签名', async () => {

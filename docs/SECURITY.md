@@ -44,6 +44,19 @@ MCP server（无密钥）→ 本地 IPC → 签名守护进程（唯一持钥者
 
 > 全量 61/61 测试全绿（含新增：CRC 篡改、地址不匹配、无效令牌、口令强度）。
 
+### 2026-08-10 深入审查修复（三视角并行：完整性 × 正确性 × 影响面）
+
+| 级别 | 问题 | 修复 |
+|------|------|------|
+| 🔴 Critical | `wallet_restore` 绕过凭证隔离：恢复码×2 入参 + 明文出参全进 LLM | 输入改本地文件读取（`recovery_file_path`）；输出改 `recovery_codes_file`+`note`；min(12)；新增 expected_address/email 参数与 2 条功能测试 |
+| 🟠 Warning | `signMessage`/`createUnlockToken` 异常路径私钥残留 | `vault.wipe()` 移入 finally；privateKey null 初始化 + finally 清零 |
+| 🟠 Warning | init/restore 恢复码落盘不在原子/回滚范围 | 落盘前置（失败不再产生锁死态）；meta/device/recovery 三文件统一回滚 |
+| 🟠 Warning | 地址交叉校验新设备场景失效 / 邮箱更新指引不可执行 | CLI/MCP 暴露 `expected_address`；`restoreWallet` 新增 email 参数自动发送新片③ |
+| 🟡 Suggestion | CLI 恢复码回显 / user_id·action 无校验 / 裸 0x19 / schema 0x 漂移 | 掩码输入；action 白名单+user_id 校验；`\x19` 转义；schema 去 0x |
+| 🔴 **口令令牌** | **`wallet_create`/`wallet_restore` 口令参数仍进 LLM（最后残余凭证）** | **`passphrase_token` 机制**：CLI `passphrase-token` 本地输入口令 → 生成口令会话令牌（`passphrase-*` 文件，5min/0600/单次）；MCP 工具只接收令牌，口令明文永不经 LLM——**口令+恢复码全部凭证闭环** |
+
+> 全量 72/72 测试全绿。
+
 ## 依赖审计要求
 
 - 密码学依赖：noble-curves / noble-hashes（审计级、纯 TS、零依赖）
