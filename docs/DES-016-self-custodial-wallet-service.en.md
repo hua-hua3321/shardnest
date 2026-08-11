@@ -123,7 +123,7 @@ issueSignedRequest(                         verifySignedRequest(
                                             → platform verifies via verify-sdk
 ```
 
-- `canonicalString`: JSON array serialization (no delimiter ambiguity).
+- `canonicalBytes`: length-prefixed deterministic binary (v 1B | action lp | intent_hash 32B | display lp | user_id lp | wallet_address 20B | nonce lp | expires_at 8B BE) — UTF-8 bytes + 4-byte BE length prefixes; no JSON/Unicode/int-float ambiguity across languages.
 - EIP-191 hashing must stay byte-identical across `vault.ts` / `verify-sdk` / `protocol` (three implementations).
 - Fields validated: `action` whitelist, `intent_hash`/`wallet_address` format, `display` length, `expires_at` integer, `user_id` non-empty.
 - Recovery-bit convention: 0/1 (65-byte `r||s||v`, no `0x` prefix).

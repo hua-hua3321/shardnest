@@ -36,7 +36,8 @@ SHARDNEST_HOME=$(mktemp -d) bun packages/cli/src/index.ts init
 ```
 core（纯密码学，无 IO）
   ├─ shamir.ts   GF(2^8) SSS（生成元 3 建表；split/combine/reshare）
-  └─ keys.ts     CSPRNG 密钥、keccak 地址、EIP-55、scrypt KEK
+  └─ keys.ts     CSPRNG 熵（根）、BIP-39/44 派生私钥、keccak 地址、EIP-55、scrypt KEK
+  └─ mnemonic.ts 熵↔24 词标准编码（@scure/bip39）、seed、BIP-32 m/44'/60'/0'/0/0 派生
 signer（签名守护与凭证会话）
   ├─ vault.ts           WalletVault：分片解锁→EIP-191 签名→wipe（唯一持钥者）
   ├─ approval.ts        双闸门之「用户确认」回调抽象（默认仅放行 sign_message）
@@ -69,7 +70,7 @@ mcp-server（薄壳，无密钥：6 工具 + 双闸门接线）
 2. **EIP-191 哈希三处一致**：`vault.ts` / `verify-sdk/index.ts` / `protocol/signed-request.ts` 的 `personalMessageHash` 必须字节级一致，否则签名验签全面失配
 3. **恢复码 CRC 覆盖 `index:hex`**——`decodeRecoveryCode` 校验 index ∈ [1,255] 整数 + hex 格式 + CRC；篡改任一字段即拒绝
 4. **私钥范围校验**：`WalletVault.assertValidPrivateKey`（0 < priv < n）防组合出坏私钥静默签名
-5. **私钥/分片内存清零**：所有组合出的私钥与明文分片用后必须 `fill(0)`（含异常路径，用 finally）
+5. **敏感材料内存清零**：所有组合出的熵、私钥、BIP-39 seed 与明文分片用后必须 `fill(0)`（含异常路径，用 finally）——seed 敏感度等同私钥（可派生全部子私钥）
 6. **原子性**：init/restore 的可失败操作（邮件/恢复码落盘）全部前置，最后才写 meta/device；失败三文件回滚
 7. **reshare 语义**：旧分片集密码学上仍可重组同一私钥——reshare 后必须提示物理清理旧载体（恢复码文件/邮箱旧邮件）
 

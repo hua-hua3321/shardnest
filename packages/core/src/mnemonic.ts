@@ -45,7 +45,12 @@ export function derivePrivateKeyFromSeed(seed: Uint8Array): Uint8Array {
 
 /** 助记词 → 账户私钥（全链派生） */
 export function derivePrivateKeyFromMnemonic(mnemonic: string): Uint8Array {
-  return derivePrivateKeyFromSeed(mnemonicToSeed(mnemonic))
+  const seed = mnemonicToSeed(mnemonic) // 64B seed = 钱包根访问权（可派生所有子私钥）
+  try {
+    return derivePrivateKeyFromSeed(seed)
+  } finally {
+    seed.fill(0) // 不变式 5：seed 敏感度等同私钥，任何路径均清零
+  }
 }
 
 /** 熵 → 账户私钥（init/签名共用入口） */
