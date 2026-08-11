@@ -30,7 +30,10 @@ import { entropyToMnemonic, mnemonicToEntropy, generateEntropy } from '@wallet-s
 
 /** 钱包目录（动态读取 env，便于测试隔离） */
 export function getHomeDir(): string {
-  return process.env.SHARDNEST_HOME ?? path.join(process.env.HOME ?? '.', '.shardnest')
+  // I19: 空串/空白 SHARDNEST_HOME 也回退默认（?? 只对 null/undefined 生效，
+  // 显式设空会导致钱包落到当前工作目录）
+  const home = process.env.SHARDNEST_HOME?.trim()
+  return home && home.length > 0 ? home : path.join(process.env.HOME ?? '.', '.shardnest')
 }
 const metaFile = () => path.join(getHomeDir(), 'metadata.json')
 const deviceFile = () => path.join(getHomeDir(), 'device-share.json')
@@ -284,8 +287,13 @@ export async function restoreFromMnemonic(
 
 /** 显示地址（无需口令） */
 export async function getAddress(): Promise<string> {
-  const meta = JSON.parse(await fs.readFile(metaFile(), 'utf8')) as { address: string }
-  return meta.address
+  const meta = JSON.parse(await fs.readFile(metaFile(), 'utf8')) as { address?: string }
+  const addr = meta.address
+  // I18: metadata 被篡改成有效 JSON 但无合法地址时——干净拒绝而非裸 TypeError
+  if (typeof addr !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(addr)) {
+    throw new Error('metadata 损坏或缺少合法地址——请检查设备文件后重试')
+  }
+  return addr
 }
 
 /** 解锁并签名：口令解锁设备片① + 用户提供 1 个恢复码 → EIP-191 签名 */

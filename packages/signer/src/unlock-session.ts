@@ -21,7 +21,10 @@ import { randomBytes, bytesToHex } from '@noble/hashes/utils'
 export const UNLOCK_TTL_MS = 5 * 60 * 1000 // 5 分钟
 
 export function getUnlockDir(): string {
-  return path.join(process.env.SHARDNEST_HOME ?? path.join(process.env.HOME ?? '.', '.shardnest'), 'unlock')
+  // I19: 空串回退（与 commands.getHomeDir 一致）
+  const home = process.env.SHARDNEST_HOME?.trim()
+  const base = home && home.length > 0 ? home : path.join(process.env.HOME ?? '.', '.shardnest')
+  return path.join(base, 'unlock')
 }
 
 /**

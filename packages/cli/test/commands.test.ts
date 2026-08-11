@@ -278,6 +278,25 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(() => decodeRecoveryCode(tampered)).toThrow(/校验失败/)
   })
 
+  it('I18：metadata 损坏（有效 JSON 无 address）→ 干净拒绝而非裸 TypeError', async () => {
+    await initWallet(PASSPHRASE)
+    await fs.writeFile(path.join(getHomeDir(), 'metadata.json'), JSON.stringify({}), { mode: 0o600 })
+    await expect(getAddress()).rejects.toThrow(/metadata 损坏/)
+  })
+
+  it('I19：SHARDNEST_HOME 空串 → 回退默认目录（不落 cwd）', async () => {
+    const saved = process.env.SHARDNEST_HOME
+    delete process.env.SHARDNEST_HOME
+    const defaultDir = path.join(process.env.HOME ?? '.', '.shardnest')
+    expect(getHomeDir()).toBe(defaultDir)
+    process.env.SHARDNEST_HOME = '   '
+    expect(getHomeDir()).toBe(defaultDir)
+    process.env.SHARDNEST_HOME = '/tmp/x'
+    expect(getHomeDir()).toBe('/tmp/x')
+    if (saved === undefined) delete process.env.SHARDNEST_HOME
+    else process.env.SHARDNEST_HOME = saved
+  })
+
   it('W9：已有钱包时 initWallet 拒绝（防静默覆盖）；force=true 可覆盖', async () => {
     await initWallet(PASSPHRASE)
     await expect(initWallet(PASSPHRASE)).rejects.toThrow(/钱包已存在/)
