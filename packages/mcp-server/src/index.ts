@@ -14,7 +14,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { verifySignedRequest, type SignedRequest } from '@wallet-service/protocol'
-import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile, restoreFromMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE } from '@wallet-service/cli'
+import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile, restoreFromMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, type WipeScope } from '@wallet-service/cli'
 import { defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession, consumePassphraseSession } from '@wallet-service/signer'
 
 export const PLATFORM_ADDRESS = process.env.SHARDNEST_PLATFORM_ADDRESS ?? ''
@@ -110,20 +110,29 @@ export function createShardnestServer(
     'wallet_wipe',
     {
       // 无敏感参数；高风险操作：必须通过 approval 用户确认闸门（默认拒绝）
+      // scope: 'saved'=仅删需保存的明文备份（默认，保守）/ 'all'=删除本机全部密钥材料
+      scope: z.enum(['saved', 'all']).optional(),
     },
-    async () => {
-      const approved = await approval({ action: 'wipe_wallet', display: '彻底删除本机钱包全部密钥材料（不可恢复）' })
+    async ({ scope }) => {
+      const wipeScope: WipeScope = scope ?? 'saved'
+      const display = wipeScope === 'saved'
+        ? '仅删除本机明文备份文件（恢复码/助记词，不可恢复；钱包保留）'
+        : '删除本机全部密钥材料（不可恢复；需用保存的恢复码/助记词重建）'
+      const approved = await approval({ action: 'wipe_wallet', display })
       if (!approved) {
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'USER_REJECTED' }) }] }
       }
       try {
-        const { removed } = await wipeWallet(WIPE_CONFIRM_PHRASE)
+        const { removed } = await wipeWallet(WIPE_CONFIRM_PHRASE, wipeScope)
         return {
           content: [{
             type: 'text' as const,
             text: JSON.stringify({
               removed_count: removed.length,
-              warning: '本机密钥材料已彻底删除（不可恢复）；请确保已用离线保存的恢复码/助记词完成备份',
+              removed: removed,
+              warning: wipeScope === 'saved'
+                ? '明文备份（恢复码/助记词）已彻底删除；钱包本体保留，口令解锁继续可用'
+                : '本机密钥材料已彻底删除（不可恢复）；请确保已用离线保存的恢复码/助记词完成备份',
             }),
           }],
         }

@@ -65,11 +65,24 @@ describe('shardnest MCP 薄壳', () => {
     expect(out.error).toBe('USER_REJECTED')
   })
 
-  it('wallet_wipe：确认放行 → 本机密钥材料彻底删除', async () => {
+  it('wallet_wipe：默认 scope=saved → 仅删明文备份，钱包保留', async () => {
+    const client = await connect()
+    const created = await createWallet(client, PASSPHRASE)
+    const res = await client.callTool({ name: 'wallet_wipe', arguments: {} })
+    const out = JSON.parse((res.content[0] as { text: string }).text)
+    expect(out.removed).toContain('recovery-codes.txt')
+    expect(out.removed).not.toContain('device-share.json')
+    expect(out.warning).toContain('钱包本体保留')
+    // 钱包地址仍可读
+    const addrRes = await client.callTool({ name: 'wallet_address', arguments: {} })
+    expect((addrRes.content[0] as { text: string }).text).toBe(created.address)
+  })
+
+  it('wallet_wipe：scope=all → 本机密钥材料彻底删除', async () => {
     const client = await connect()
     const created = await createWallet(client, PASSPHRASE)
     expect(created.recoveryCodes.length).toBeGreaterThan(0)
-    const res = await client.callTool({ name: 'wallet_wipe', arguments: {} })
+    const res = await client.callTool({ name: 'wallet_wipe', arguments: { scope: 'all' } })
     const out = JSON.parse((res.content[0] as { text: string }).text)
     expect(out.removed_count).toBeGreaterThanOrEqual(3)
     expect(out.warning).toContain('不可恢复')

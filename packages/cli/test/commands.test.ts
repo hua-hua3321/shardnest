@@ -15,6 +15,7 @@ import {
   saveRecoveryCodes,
   wipeWallet,
   WIPE_CONFIRM_PHRASE,
+  listSavedFiles,
 } from '../src/commands'
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
@@ -197,6 +198,27 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     // 用用户保存的恢复码可重建（设备文件已删，走 2 恢复码路径）
     const restored = await restoreWallet(PASSPHRASE, [savedCodes[0], savedCodes[1]], result.address)
     expect(restored.address).toBe(result.address)
+  })
+
+  it('wipe saved 模式：仅删明文备份（恢复码/助记词），钱包本体保留可用', async () => {
+    const result = await initWallet(PASSPHRASE, undefined, true) // 含助记词
+    expect(result.mnemonicFile).toBeTruthy()
+    // 删除前 listSavedFiles 显示清单
+    const before = await listSavedFiles()
+    expect(before).toContain('recovery-codes.txt')
+    expect(before).toContain('mnemonic.txt')
+    // saved 模式删除
+    const { removed } = await wipeWallet(WIPE_CONFIRM_PHRASE, 'saved')
+    expect(removed).toContain('recovery-codes.txt')
+    expect(removed).toContain('mnemonic.txt')
+    expect(removed).not.toContain('device-share.json') // 钱包本体保留
+    // 明文备份已删
+    await expect(fs.stat(result.recoveryFile!)).rejects.toThrow()
+    await expect(fs.stat(result.mnemonicFile!)).rejects.toThrow()
+    // 钱包仍可用：地址可读 + 口令解锁签名正常
+    expect(await getAddress()).toBe(result.address)
+    const out = JSON.parse(await signMessage(PASSPHRASE, result.recoveryCodes[0], 'still-alive'))
+    expect(out.address).toBe(result.address)
   })
 
   it('restoreFromMnemonic 无效助记词 → 抛错', async () => {

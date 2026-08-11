@@ -421,39 +421,63 @@ async function secureDelete(file: string): Promise<void> {
   await fs.rm(file, { force: true })
 }
 
+/** wipe 范围：all=本机全部密钥材料 / saved=仅'需用户保存'的明文备份（恢复码+助记词） */
+export type WipeScope = 'all' | 'saved'
+
+/** 列出当前存在的'需用户保存'文件（basename，供展示确认） */
+export async function listSavedFiles(): Promise<string[]> {
+  const names: string[] = []
+  for (const f of [recoveryFile(), mnemonicFile()]) {
+    try {
+      await fs.stat(f)
+      names.push(path.basename(f))
+    } catch {
+      // 不存在跳过
+    }
+  }
+  return names
+}
+
 /**
- * 彻底删除钱包（不可恢复）：
- * - 覆写并删除 device-share / recovery-codes / mnemonic / metadata / unlock 会话
+ * 彻底删除（不可恢复，覆写 3 遍 + unlink）：
+ * - scope='saved'：仅删'需用户保存'的明文备份（recovery-codes.txt / mnemonic.txt）——
+ *   本机不再有可被窃取的明文恢复码/助记词；钱包本体（设备片）保留，口令解锁继续可用
+ * - scope='all'：删除本机全部密钥材料（device-share / recovery / mnemonic / metadata / unlock 会话）
  * - 执行前必须输入确认短语 WIPE_CONFIRM_PHRASE（防误删）
  * - ⚠️ 调用前必须提醒用户：确认已保存恢复码/助记词（用户保存的那一份是唯一恢复途径）
+ * @returns removed 为 basename 清单（展示用）
  */
-export async function wipeWallet(confirmPhrase: string): Promise<{ removed: string[] }> {
+export async function wipeWallet(confirmPhrase: string, scope: WipeScope = 'all'): Promise<{ removed: string[] }> {
   if (confirmPhrase !== WIPE_CONFIRM_PHRASE) {
     throw new Error('确认短语不匹配，已中止（防止误删）')
   }
   const removed: string[] = []
-  const targets = [metaFile(), deviceFile(), recoveryFile(), mnemonicFile()]
+  const targets = scope === 'saved'
+    ? [recoveryFile(), mnemonicFile()]
+    : [metaFile(), deviceFile(), recoveryFile(), mnemonicFile()]
   for (const f of targets) {
     try {
       await fs.stat(f)
       await secureDelete(f)
-      removed.push(f)
+      removed.push(path.basename(f))
     } catch {
       // 不存在则跳过
     }
   }
-  // unlock/ 目录（令牌会话）
-  try {
-    const dir = getUnlockDir()
-    const entries = await fs.readdir(dir)
-    for (const e of entries) {
-      const f = path.join(dir, e)
-      await secureDelete(f)
-      removed.push(f)
+  if (scope === 'all') {
+    // unlock/ 目录（令牌会话）
+    try {
+      const dir = getUnlockDir()
+      const entries = await fs.readdir(dir)
+      for (const e of entries) {
+        const f = path.join(dir, e)
+        await secureDelete(f)
+        removed.push(path.basename(f))
+      }
+      await fs.rmdir(dir).catch(() => {})
+    } catch {
+      // 无 unlock 目录
     }
-    await fs.rmdir(dir).catch(() => {})
-  } catch {
-    // 无 unlock 目录
   }
   return { removed }
 }

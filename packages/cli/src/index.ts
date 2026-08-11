@@ -9,7 +9,7 @@
  *   shardnest restore     # 输入 2 个恢复码恢复（新设备/口令丢失）
  */
 import * as readline from 'node:readline'
-import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE } from './commands'
+import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles } from './commands'
 import { createPassphraseSession } from '@wallet-service/signer'
 
 async function prompt(question: string): Promise<string> {
@@ -89,9 +89,25 @@ async function main() {
       break
     }
     case 'wipe': {
-      console.log('\n⚠️  彻底删除（不可恢复）！')
-      console.log('    将覆写并删除本机全部密钥材料：设备分片、恢复码、助记词、钱包数据')
-      console.log('    删除后，本机不再持有任何可动用资金的东西——但也无法再本地恢复')
+      console.log('\n⚠️  删除为不可恢复操作（覆写 3 遍 + 删除）')
+      console.log('\n📌 请选择删除范围：')
+      console.log('  1) 仅删除「需用户保存」的明文备份（恢复码/助记词）')
+      console.log('     本机不再有可被窃取的明文备份；钱包本体保留，口令解锁继续可用（推荐）')
+      console.log('  2) 删除本机所有相关内容（钱包也删）')
+      console.log('     本机不再持有任何密钥材料；需用您保存的恢复码/助记词重建')
+      const scopeChoice = (await prompt('选择 [1/2]: ')).trim()
+      const scope = scopeChoice === '2' ? 'all' : 'saved'
+      if (scope === 'saved') {
+        const savedFiles = await listSavedFiles()
+        if (savedFiles.length === 0) {
+          console.log('\nℹ️  当前没有「需保存」的明文备份文件（恢复码/助记词均不存在），无需删除')
+          break
+        }
+        console.log('\n📄 将删除以下文件（覆写 3 遍，不可恢复）:')
+        for (const name of savedFiles) console.log(`  - ${name}`)
+      } else {
+        console.log('\n📄 将删除本机全部密钥材料：device-share.json / recovery-codes.txt / mnemonic.txt / metadata.json / unlock 会话')
+      }
       console.log('\n📌 执行前请确认：')
       console.log('    1. 恢复码/助记词已保存到安全位置（纸/密码管理器/邮箱备份）——这是唯一恢复途径')
       console.log('    2. 业务平台绑定等操作已处理完毕')
@@ -100,9 +116,14 @@ async function main() {
         console.log('\n❌ 确认短语不匹配，已中止（未删除任何文件）')
         break
       }
-      const { removed } = await wipeWallet(confirm)
-      console.log(`\n✅ 已彻底删除 ${removed.length} 个文件/会话（覆写 3 遍 + 删除，不可恢复）`)
-      console.log('   使用您保存的恢复码（任意 2 片）或 24 词助记词，随时可重建钱包')
+      const { removed } = await wipeWallet(confirm, scope)
+      console.log(`\n✅ 已彻底删除 ${removed.length} 个文件（覆写 3 遍 + 删除，不可恢复）:`)
+      for (const name of removed) console.log(`  - ${name}`)
+      if (scope === 'saved') {
+        console.log('   钱包本体保留（设备片口令解锁继续可用）；如需删除钱包请重新执行 wipe 选择 2')
+      } else {
+        console.log('   使用您保存的恢复码（任意 2 片）或 24 词助记词，随时可重建钱包')
+      }
       break
     }
     case 'mnemonic-export': {

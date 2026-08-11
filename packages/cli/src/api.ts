@@ -17,5 +17,7 @@ export {
   exportMnemonicFromCodes,
   wipeWallet,
   WIPE_CONFIRM_PHRASE,
+  listSavedFiles,
+  type WipeScope,
   type InitResult,
 } from './commands'
