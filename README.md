@@ -154,8 +154,12 @@ for p in core signer cli verify-sdk protocol mcp-server; do (cd packages/$p && b
 
 ## Documentation
 
-- [Security model](docs/SECURITY.md) — threat matrix, key lifecycle, fix records
-- [Design (DES-016)](docs/DES-016-self-custodial-wallet-service.md) — full design, roadmap
+- [Tutorial](docs/TUTORIAL.en.md) — end-to-end usage tutorial (create/sign/recover/wipe)
+- [Integration](docs/INTEGRATION.en.md) — third-party platform integration guide
+- [Development](docs/DEVELOPMENT.en.md) — development & modification guide (invariants, scenarios)
+- [Changelog](docs/CHANGELOG.en.md) — modification history
+- [Security model](docs/SECURITY.en.md) — threat matrix, key lifecycle, fix records
+- [Design (DES-016)](docs/DES-016-self-custodial-wallet-service.en.md) — full design, roadmap
 - [Protocol](protocol/README.md) — `signed_request` v1 spec & JSON Schema
 
 ## License

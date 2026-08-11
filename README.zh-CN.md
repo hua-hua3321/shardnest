@@ -141,6 +141,10 @@ for p in core signer cli verify-sdk protocol mcp-server; do (cd packages/$p && b
 
 ## 文档
 
+- [使用教程](docs/TUTORIAL.md) — 端到端使用教程（创建/签名/恢复/删除）
+- [第三方接入](docs/INTEGRATION.md) — 业务平台接入指南（签发/验签/绑定/提现）
+- [开发与修改](docs/DEVELOPMENT.md) — 开发修改指南（不变式/常见修改场景）
+- [修改说明](docs/CHANGELOG.md) — 版本变更记录
 - [安全模型](docs/SECURITY.md) — 威胁矩阵、密钥生命周期、修复记录
 - [设计（DES-016）](docs/DES-016-self-custodial-wallet-service.md) — 完整设计与路线图
 - [协议](protocol/README.md) — `signed_request` v1 规范与 JSON Schema
