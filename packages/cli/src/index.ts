@@ -36,7 +36,7 @@ async function prompt(question: string): Promise<string> {
 async function promptSecret(question: string): Promise<string> {
   if (process.stdin.isTTY) {
     return new Promise((resolve) => {
-      const r = getRl()
+      const r = getRl() as unknown as { _writeToOutput: (s: string) => void; question: (q: string, cb: (a: string) => void) => void }
       const orig = r._writeToOutput.bind(r)
       r._writeToOutput = (s: string) => {
         if (s === '\r\n' || s === '\n') orig(s)
@@ -73,7 +73,7 @@ async function main() {
       const passphrase = await promptSecret(t('口令（>=12 位）: ', "Passphrase (>=12 chars): "))
       if (passphrase.length < 12) throw new Error(t('口令至少 12 位', "Passphrase must be at least 12 chars"))
       const token = await createPassphraseSession(passphrase)
-      console.log(t('\n🔑 口令令牌（5 分钟有效，单次使用，请勿在聊天中转发）:', '\n🔑 Passphrase token (valid 5 min, single-use, do not share in chats):'))
+      console.log(t('\n🔑 口令令牌（5 分钟有效，单次使用）：请粘贴到 MCP 工具调用中，勿转发给他人/其他平台', '\n🔑 Passphrase token (valid 5 min, single-use): paste into the MCP tool call; do not forward to others/other platforms'))
       console.log(token)
       break
     }
@@ -82,13 +82,13 @@ async function main() {
       await printRecoverySourceGuide()
       const code = await promptSecret(t('恢复码（掩码输入）: ', "Recovery code (masked): "))
       const token = await createUnlockToken(passphrase, code)
-      console.log(t('\n🔓 解锁令牌（5 分钟有效，单次使用，请勿在聊天中转发）:', '\n🔓 Unlock token (valid 5 min, single-use, do not share in chats):'))
+      console.log(t('\n🔓 解锁令牌（5 分钟有效，单次使用）：请粘贴到 MCP 工具调用中，勿转发给他人/其他平台', '\n🔓 Unlock token (valid 5 min, single-use): paste into the MCP tool call; do not forward to others/other platforms'))
       console.log(token)
       break
     }
     case 'init': {
       const passphrase = await promptSecret(t('设置口令（>=12 位，用于加密设备分片）: ', "Set passphrase (>=12 chars, encrypts device share): "))
-      const email = await prompt(t('邮箱（可选，自动发送备份分片，回车跳过）: ', "Email (optional, auto-sends backup share; Enter to skip): "))
+      const email = await prompt(t('邮箱（可选，自动发送备份分片——注意：邮件商可看到该明文分片（单片零信息量），回车跳过）: ', "Email (optional, auto-sends backup share — note: the mail provider can see this plaintext share (single share = zero info); Enter to skip): "))
       console.log('\n' + t('是否生成 24 词助记词备份？（默认不生成）', "Generate a 24-word mnemonic backup? (default: No)"))
       console.log(t('  ✅ 生成：单凭 24 词即可恢复钱包（最简恢复路径，行业标准格式）', "  ✅ Yes: recover with just the 24 words (simplest, industry standard)"))
       console.log(t('  ⚠️  代价：助记词 = 完整私钥（单点）——泄露即资金丢失，无门限保护，需严格保管', "  ⚠️ Cost: mnemonic = full private key (single point) — leak means total loss, no threshold protection"))
@@ -142,7 +142,7 @@ async function main() {
       console.log('\n📌 ' + t('执行前请确认：', "Before proceeding, confirm:"))
       console.log(t('    1. 恢复码/助记词已保存到安全位置（纸/密码管理器/邮箱备份）——这是唯一恢复途径', "    1. Recovery codes/mnemonic saved somewhere safe (paper/password manager/email) — this is the only recovery path"))
       console.log(t('    2. 业务平台绑定等操作已处理完毕', "    2. Business platform bindings etc. are finalized"))
-      const confirm = await prompt(`\nt('请输入确认短语「', 'Type the confirm phrase "') + ${WIPE_CONFIRM_PHRASE} + t('」以继续: ', '" to continue: ')`)
+      const confirm = await prompt('\n' + t('请输入确认短语「', 'Type the confirm phrase "') + WIPE_CONFIRM_PHRASE + t('」以继续: ', '" to continue: '))
       if (confirm !== WIPE_CONFIRM_PHRASE) {
         console.log('\n❌ ' + t('确认短语不匹配，已中止（未删除任何文件）', "Confirm phrase mismatch, aborted (nothing deleted)"))
         break

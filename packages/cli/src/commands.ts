@@ -191,7 +191,7 @@ async function createWalletFromPrivateKey(
     mnemonicFileWritten = await saveMnemonic(privateKeyToMnemonic(privateKey))
   }
 
-  // 3. 原子落盘 + 回滚（meta 成功 device 失败 → 清理 meta 不留半成品）
+  // 3. 原子落盘 + 回滚（失败时清理全部已写文件——含明文恢复码/助记词=私钥材料）
   try {
     await fs.mkdir(getHomeDir(), { recursive: true })
     await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
@@ -199,6 +199,8 @@ async function createWalletFromPrivateKey(
   } catch (err) {
     await fs.rm(metaFile(), { force: true })
     await fs.rm(deviceFile(), { force: true })
+    await fs.rm(recoveryFileWritten, { force: true }) // 明文恢复码（2 片=私钥）
+    if (mnemonicFileWritten) await fs.rm(mnemonicFileWritten, { force: true }) // 助记词=完整私钥
     throw err
   } finally {
     privateKey.fill(0) // 所有路径（成功/异常）均清零
@@ -313,7 +315,7 @@ export async function restoreWallet(
   const localCodes = emailed ? [newCodes[0]] : newCodes
   const recoveryFileWritten = await saveRecoveryCodes(localCodes, emailed)
 
-  // 原子落盘 + 回滚
+  // 原子落盘 + 回滚（失败时清理全部已写文件——含明文恢复码=私钥材料）
   try {
     await fs.mkdir(getHomeDir(), { recursive: true })
     await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
@@ -321,6 +323,7 @@ export async function restoreWallet(
   } catch (err) {
     await fs.rm(metaFile(), { force: true })
     await fs.rm(deviceFile(), { force: true })
+    await fs.rm(recoveryFileWritten, { force: true }) // 明文恢复码（2 片=私钥）
     throw err
   } finally {
     privateKey.fill(0)
@@ -399,6 +402,12 @@ export async function createUnlockToken(passphrase: string, recoveryCode: string
   let privateKey: Uint8Array | null = null
   try {
     privateKey = combineShares([share1, share2])
+    // 地址交叉校验：防止输错恢复码生成「垃圾私钥」令牌（签名被拒且用户不知原因）
+    const { privateKeyToAddress } = await import('@wallet-service/core')
+    const want = await readOldAddress()
+    if (want && privateKeyToAddress(privateKey).toLowerCase() !== want.toLowerCase()) {
+      throw new Error('组合出的地址与本地钱包不一致——恢复码可能输错，操作已中止')
+    }
     return await createUnlockSession(privateKey)
   } finally {
     privateKey?.fill(0) // 异常路径也清零
@@ -427,7 +436,7 @@ async function secureDelete(file: string): Promise<void> {
             // 每个位置生成新随机块（防模式可预测）+ 分块防大文件内存
             const chunk = randomBytes(Math.min(64 * 1024, stat.size - written))
             const n = await fh.write(chunk, 0, chunk.length, written)
-            written += n
+            written += typeof n === 'number' ? n : n.bytesWritten
           }
         }
         await fh.sync().catch(() => {})

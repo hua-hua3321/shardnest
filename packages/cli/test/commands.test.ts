@@ -223,6 +223,38 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(out.address).toBe(result.address)
   })
 
+  it('原子性回滚：device 写入失败时 recovery-codes.txt 与 mnemonic.txt 一并清理（C1）', async () => {
+    // 先正常建一个带助记词的钱包（制造 mnemonic.txt）
+    const ok = await initWallet(PASSPHRASE, undefined, true)
+    expect(ok.mnemonicFile).toBeTruthy()
+    const mnemonicFile = ok.mnemonicFile as string
+    const recoveryFile = ok.recoveryFile as string
+    expect(await fs.exists(mnemonicFile)).toBe(true)
+    expect(await fs.exists(recoveryFile)).toBe(true)
+
+    // 模拟 device 写入失败：initWallet 再次运行时 device 写抛错
+    const realWriteFile = fs.writeFile.bind(fs)
+    let fail = false
+    fs.writeFile = (async (file: string | URL, ...rest: unknown[]) => {
+      if (fail && String(file).endsWith('device-share.json')) {
+        const err = new Error('disk full (simulated)') as NodeJS.ErrnoException
+        throw err
+      }
+      return (realWriteFile as (f: string | URL, ...r: unknown[]) => Promise<void>)(file, ...rest)
+    }) as typeof fs.writeFile
+    try {
+      fail = true
+      // 新口令 + 助记词——必须与旧钱包无关；这里仅验证回滚语义
+      await expect(initWallet('another-passphrase-456!', undefined, true)).rejects.toThrow('disk full')
+    } finally {
+      fail = false
+      fs.writeFile = realWriteFile
+    }
+    // 回滚断言：recovery-codes.txt / mnemonic.txt 都被清理（不残留私钥材料）
+    expect(await fs.exists(recoveryFile)).toBe(false)
+    expect(await fs.exists(mnemonicFile)).toBe(false)
+  })
+
   it('getRecoveryFileStatus：1 片=emailed / 2 片=local-only / 无文件=missing', async () => {
     // 无文件
     expect(await getRecoveryFileStatus()).toBe('missing')

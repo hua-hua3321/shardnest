@@ -48,6 +48,7 @@ export function createShardnestServer(
 ) {
   const server = new McpServer({ name: 'shardnest', version: '0.3.0' })
 
+  // @ts-expect-error TS2589: sdk 1.x registerTool 泛型+zod 推导深度超限（运行时无影响）
   server.tool(
     'wallet_create',
     {
@@ -192,6 +193,7 @@ export function createShardnestServer(
     },
   )
 
+  // @ts-expect-error TS2589: sdk 1.x registerTool 泛型+zod 推导深度超限（运行时无影响）
   server.tool(
     'signed_request_sign',
     {

@@ -26,7 +26,7 @@ const PASSPHRASE = 'mcp-passphrase-123!'
 async function createWallet(client: Client, passphrase: string, email?: string) {
   const token = await createPassphraseSession(passphrase)
   const res = await client.callTool({ name: 'wallet_create', arguments: { passphrase_token: token, email } })
-  const data = JSON.parse((res.content[0] as { text: string }).text)
+  const data = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
   const fileContent = await fs.readFile(path.join(getHomeDir(), 'recovery-codes.txt'), 'utf8')
   const recoveryCodes = fileContent.split('\n').filter((l) => l.startsWith('sn1-'))
   return { address: data.address, recoveryCodes, data }
@@ -61,7 +61,7 @@ describe('shardnest MCP 薄壳', () => {
   it('wallet_wipe：用户拒绝确认 → USER_REJECTED（高风险闸门默认拒绝）', async () => {
     const client = await connect(() => false)
     const res = await client.callTool({ name: 'wallet_wipe', arguments: {} })
-    const out = JSON.parse((res.content[0] as { text: string }).text)
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('USER_REJECTED')
   })
 
@@ -69,13 +69,13 @@ describe('shardnest MCP 薄壳', () => {
     const client = await connect()
     const created = await createWallet(client, PASSPHRASE)
     const res = await client.callTool({ name: 'wallet_wipe', arguments: {} })
-    const out = JSON.parse((res.content[0] as { text: string }).text)
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.removed).toContain('recovery-codes.txt')
     expect(out.removed).not.toContain('device-share.json')
     expect(out.warning).toContain('钱包本体保留')
     // 钱包地址仍可读
     const addrRes = await client.callTool({ name: 'wallet_address', arguments: {} })
-    expect((addrRes.content[0] as { text: string }).text).toBe(created.address)
+    expect(((addrRes.content as unknown[])[0] as { text: string }).text).toBe(created.address)
   })
 
   it('wallet_wipe：scope=all → 本机密钥材料彻底删除', async () => {
@@ -83,7 +83,7 @@ describe('shardnest MCP 薄壳', () => {
     const created = await createWallet(client, PASSPHRASE)
     expect(created.recoveryCodes.length).toBeGreaterThan(0)
     const res = await client.callTool({ name: 'wallet_wipe', arguments: { scope: 'all' } })
-    const out = JSON.parse((res.content[0] as { text: string }).text)
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.removed_count).toBeGreaterThanOrEqual(3)
     expect(out.warning).toContain('不可恢复')
     // 本地恢复码文件已删除
@@ -104,7 +104,7 @@ describe('shardnest MCP 薄壳', () => {
       name: 'wallet_create',
       arguments: { passphrase_token: token, generate_mnemonic: true },
     })
-    const data = JSON.parse((res.content[0] as { text: string }).text)
+    const data = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     // 凭证隔离：助记词内容不进 LLM，只给文件路径
     expect(data.mnemonic_file).toBeTruthy()
     expect(data.mnemonic).toBeUndefined()
@@ -118,7 +118,7 @@ describe('shardnest MCP 薄壳', () => {
     const client = await connect()
     await createWallet(client, PASSPHRASE) // 默认不生成助记词
     const res = await client.callTool({ name: 'wallet_mnemonic_export', arguments: {} })
-    const out = JSON.parse((res.content[0] as { text: string }).text)
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.mnemonic_file).toBeTruthy()
     expect(out.mnemonic).toBeUndefined()
     const fileContent = await fs.readFile(out.mnemonic_file, 'utf8')
@@ -131,7 +131,7 @@ describe('shardnest MCP 薄壳', () => {
     const client = await connect()
     const token = await createPassphraseSession(PASSPHRASE)
     const res = await client.callTool({ name: 'wallet_create', arguments: { passphrase_token: token } })
-    const data = JSON.parse((res.content[0] as { text: string }).text)
+    const data = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(data.mnemonic_file).toBeNull()
   })
 
@@ -158,7 +158,7 @@ describe('shardnest MCP 薄壳', () => {
       },
     })
     // assertSafePath 抛错 → 结构化 RESTORE_FAILED（isError=false），message 含路径约束说明
-    const out = JSON.parse((res.content[0] as { text: string }).text)
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('RESTORE_FAILED')
     expect(out.message).toMatch(/钱包目录|逃逸/)
   })
@@ -166,7 +166,7 @@ describe('shardnest MCP 薄壳', () => {
   it('wallet_mnemonic_export：用户拒绝确认 → USER_REJECTED（私钥提取闸门）', async () => {
     const client = await connect(() => false)
     const res = await client.callTool({ name: 'wallet_mnemonic_export', arguments: {} })
-    const out = JSON.parse((res.content[0] as { text: string }).text)
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('USER_REJECTED')
   })
 
@@ -182,7 +182,7 @@ describe('shardnest MCP 薄壳', () => {
         expected_address: created.address,
       },
     })
-    const out = JSON.parse((res.content[0] as { text: string }).text)
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.address).toBe(created.address)
     // 凭证隔离：响应无恢复码明文，只有文件路径
     expect(out.recovery_codes).toBeUndefined()
@@ -204,7 +204,7 @@ describe('shardnest MCP 薄壳', () => {
         expected_address: '0x0000000000000000000000000000000000000000',
       },
     })
-    const out = JSON.parse((res.content[0] as { text: string }).text)
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('RESTORE_FAILED')
   })
 
@@ -213,7 +213,7 @@ describe('shardnest MCP 薄壳', () => {
     const res = await client.callTool({ name: 'wallet_create', arguments: { passphrase_token: '0'.repeat(64) } })
     // MCP SDK 将 handler 异常转为 isError + 错误文本
     expect(res.isError).toBe(true)
-    const text = res.content[0] as { type: string; text: string }
+    const text = (res.content as unknown[])[0] as { type: string; text: string }
     expect(text.text.includes('不存在') || text.text.includes('已被使用')).toBe(true)
   })
 
@@ -238,7 +238,7 @@ describe('shardnest MCP 薄壳', () => {
       name: 'signed_request_sign',
       arguments: { signed_request: req, unlock_token: token },
     })
-    const out = JSON.parse((signRes.content[0] as { text: string }).text)
+    const out = JSON.parse(((signRes.content as unknown[])[0] as { text: string }).text)
     expect(out.address).toBe(created.address)
     // 5. 验签还原同一地址（平台侧可验证）
     const sig = Uint8Array.from(Buffer.from(out.signature, 'hex'))
@@ -263,7 +263,7 @@ describe('shardnest MCP 薄壳', () => {
       name: 'signed_request_sign',
       arguments: { signed_request: req, unlock_token: token },
     })
-    const out = JSON.parse((res.content[0] as { text: string }).text)
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('WALLET_ADDRESS_MISMATCH')
   })
 
@@ -283,7 +283,7 @@ describe('shardnest MCP 薄壳', () => {
       name: 'signed_request_sign',
       arguments: { signed_request: req, unlock_token: '0'.repeat(64) },
     })
-    const out = JSON.parse((res.content[0] as { text: string }).text)
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('UNLOCK_INVALID')
   })
 
@@ -305,7 +305,7 @@ describe('shardnest MCP 薄壳', () => {
       name: 'signed_request_sign',
       arguments: { signed_request: req, unlock_token: token },
     })
-    const out = JSON.parse((res.content[0] as { text: string }).text)
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('BAD_SIGNATURE')
   })
 
@@ -326,7 +326,7 @@ describe('shardnest MCP 薄壳', () => {
       name: 'signed_request_sign',
       arguments: { signed_request: req, unlock_token: token },
     })
-    const out = JSON.parse((res.content[0] as { text: string }).text)
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('USER_REJECTED')
   })
 })

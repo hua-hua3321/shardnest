@@ -3,10 +3,14 @@
   "version": "0.3.0",
   "type": "module",
   "main": "src/index.ts",
-  "bin": { "shardnest-mcp": "src/index.ts" },
-  "scripts": { "test": "bun test" },
+  "bin": {
+    "shardnest-mcp": "src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@wallet-service/cli": "workspace:*",
     "@wallet-service/core": "workspace:*",
     "@wallet-service/protocol": "workspace:*",

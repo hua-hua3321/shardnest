@@ -138,7 +138,8 @@ export function splitSecret(secret: Uint8Array, options: SplitOptions): Share[] 
 
 /**
  * 从任意 threshold 个分片重组秘密（少于 threshold 无法重组）。
- * 传入更多分片时自动取前 threshold 个。
+ * 注意：传入超过 threshold 个分片时全部参与插值（诚实分片结果一致；
+ * 若混入错误分片将静默产出垃圾值——调用方应做地址/校验和交叉验证）。
  */
 export function combineShares(parts: Share[]): Uint8Array {
   if (parts.length < 2) throw new Error('need at least 2 shares')

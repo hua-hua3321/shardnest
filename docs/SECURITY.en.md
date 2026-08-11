@@ -76,6 +76,12 @@ MCP server (no keys) → local IPC → signing daemon (sole key holder)
 
 > Full suite 97/97 green at the time.
 
+## Known Boundaries (honest disclosure)
+
+1. **Physical erasure not guaranteed**: on copy-on-write filesystems (APFS/SSD), `secureDelete`'s 3× overwrite **cannot guarantee physical erasure** (overwrites may land on new blocks; old blocks may remain forensically recoverable). This mechanism primarily defeats **software-layer** recovery (plain file reads, trash, simple recovery tools). For physical erasure, use full-disk encryption + media destruction.
+2. **Platforms must verify address binding**: `signed_request_sign` signs `action:intent_hash` (no `wallet_address` embedded). Replay/impersonation resistance relies on the platform verifying with `verify-sdk`'s `recoverSigner(message, sig)` and comparing against the bound `wallet_address` — **the platform must perform this binding check**; signature validity alone is insufficient.
+3. **scrypt parameters tuned for local single-user**: N=2^16 (~64MB/derivation) is acceptable for a local single user (OWASP 2023 recommends N≥2^17 for server multi-user scenarios). Raise N for higher-security requirements.
+
 ## Dependency Audit Requirements
 
 - All crypto primitives must come from audited, actively maintained libraries (`@noble/*`, `@scure/*`, `@modelcontextprotocol/sdk`).

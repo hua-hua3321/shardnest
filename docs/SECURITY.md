@@ -59,6 +59,12 @@ MCP server（无密钥）→ 本地 IPC → 签名守护进程（唯一持钥者
 
 > 全量 72/72 测试全绿。
 
+## 已知边界（诚实披露）
+
+1. **物理抹除不保证**：APFS/SSD 等 copy-on-write 文件系统上，`secureDelete` 的 3 遍覆写**无法保证物理抹除**（覆写可能落到新块，旧块仍可被取证恢复）。本机制主要防**软件层**恢复（普通文件读取/回收站/简单恢复工具）。追求物理抹除需全盘加密 + 介质销毁。
+2. **平台必须校验地址绑定**：`signed_request_sign` 的签名内容为 `action:intent_hash`（不含 `wallet_address`）。签名防重放/防冒用依赖平台侧用 `verify-sdk` 的 `recoverSigner(message, sig)` 还原地址并与绑定的 `wallet_address` 比对——**平台必须做该绑定校验**，仅验签名有效性不足以防跨地址重放。
+3. **scrypt 参数为本地单用户优化**：N=2^16（约 64MB/次）对本地单用户可接受（OWASP 2023 推荐 N≥2^17 面向服务器多用户场景）。高安全需求可自行调高 N。
+
 ## 依赖审计要求
 
 - 密码学依赖：noble-curves / noble-hashes（审计级、纯 TS、零依赖）
