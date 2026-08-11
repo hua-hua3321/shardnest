@@ -49,16 +49,27 @@ export async function saveMnemonic(mnemonic: string): Promise<string> {
   return file
 }
 
-/** 恢复码落盘（0600 明文，用户自持责任；与纸备份等价，供 MCP 场景免 LLM 交付） */
-export async function saveRecoveryCodes(codes: string[]): Promise<string> {
+/** 恢复码落盘（0600 明文，用户自持责任；与纸备份等价，供 MCP 场景免 LLM 交付）
+ * 存储策略（方案 A+B）：
+ * - 邮箱发送成功（1 片本地）→ 本地仅存 1 片，头部说明另一片在邮箱——本机整体失守无法动钱
+ * - 未发邮箱（2 片本地）→ 显著警告：本地集中 2 片=私钥，整体泄露即失守，建议转移/配邮箱
+ */
+export async function saveRecoveryCodes(codes: string[], emailed = false): Promise<string> {
   const file = recoveryFile()
   await fs.mkdir(path.dirname(file), { recursive: true })
-  const content = [
-    '# shardnest 恢复码（请妥善保管，勿转发/上传）',
-    '# 任意 2 个可恢复钱包；单凭 1 个无法动用资金',
-    '',
-    ...codes.map((c) => c + ''),
-  ].join('\n') + '\n'
+  const header = emailed
+    ? [
+        '# shardnest 恢复码（本地仅 1 片）',
+        '# 另一片已发送至您的邮箱——本机目录整体泄露也无法动用资金',
+        '# 请妥善保管邮箱备份；任意 2 片（含邮箱片）可恢复钱包',
+      ]
+    : [
+        '# shardnest 恢复码（⚠️ 2 片均在本机！）',
+        '# 任意 2 片可重组私钥——本目录整体泄露 = 资金丢失（无需口令）',
+        '# 强烈建议：转移 1 片离线保存（纸/密码管理器），或重新 init 配置邮箱备份',
+        '# 单凭 1 片无法动用资金',
+      ]
+  const content = [...header, '', ...codes.map((c) => c + '')].join('\n') + '\n'
   await fs.writeFile(file, content, { mode: 0o600 })
   return file
 }
@@ -170,7 +181,11 @@ async function createWalletFromPrivateKey(
   }
 
   // 2. 可失败操作全部前置（恢复码/助记词落盘）
-  const recoveryFileWritten = await saveRecoveryCodes(recoveryCodes)
+  //    存储策略 A+B：邮箱已送达（sent）→ 本地只存片②（片③在邮箱，三处分布）；
+  //    skipped/无邮箱 → 本地存 2 片（显著警告，用户自担）
+  const emailed = backupStatus === 'sent'
+  const localCodes = emailed ? [recoveryCodes[0]] : recoveryCodes
+  const recoveryFileWritten = await saveRecoveryCodes(localCodes, emailed)
   let mnemonicFileWritten: string | undefined
   if (mnemonic) {
     mnemonicFileWritten = await saveMnemonic(privateKeyToMnemonic(privateKey))
@@ -279,7 +294,10 @@ export async function restoreWallet(
     }
     backupStatus = await sendBackupShare(email, address, newCodes[1])
   }
-  const recoveryFileWritten = await saveRecoveryCodes(newCodes)
+  // 存储策略 A+B（同 createWalletFromPrivateKey）
+  const emailed = backupStatus === 'sent'
+  const localCodes = emailed ? [newCodes[0]] : newCodes
+  const recoveryFileWritten = await saveRecoveryCodes(localCodes, emailed)
 
   // 原子落盘 + 回滚
   try {
@@ -306,12 +324,14 @@ export async function restoreWallet(
   }
 }
 
-/** 从本地恢复码文件读取恢复码（MCP 场景：路径进 LLM，内容不进） */
+/** 从本地恢复码文件读取恢复码（MCP 场景：路径进 LLM，内容不进）
+ * 注意：邮箱备份已送达时本地可能仅 1 片——调用方需自行判断是否足够
+ */
 export async function readRecoveryCodesFromFile(filePath?: string): Promise<string[]> {
   const file = filePath ?? path.join(getHomeDir(), 'recovery-codes.txt')
   const content = await fs.readFile(file, 'utf8')
   const codes = content.split('\n').filter((l) => l.trim().startsWith('sn1-')).map((l) => l.trim())
-  if (codes.length < 2) throw new Error('恢复码文件不足 2 片')
+  if (codes.length === 0) throw new Error('恢复码文件为空')
   return codes
 }
 

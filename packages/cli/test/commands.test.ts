@@ -12,6 +12,7 @@ import {
   restoreFromMnemonic,
   exportMnemonic,
   exportMnemonicFromCodes,
+  saveRecoveryCodes,
 } from '../src/commands'
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
@@ -89,6 +90,28 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     const share = { index: 7, bytes: new Uint8Array([1, 2, 3, 255]) }
     expect(decodeRecoveryCode(encodeRecoveryCode(share))).toEqual(share)
     expect(() => decodeRecoveryCode('bad-format')).toThrow()
+  })
+
+  it('saveRecoveryCodes：邮箱已送达（emailed）→ 本地仅 1 片 + 邮箱说明头（方案 A）', async () => {
+    const share = { index: 2, bytes: new Uint8Array(32).fill(7) }
+    const code = encodeRecoveryCode(share)
+    const file = await saveRecoveryCodes([code], true)
+    const fileContent = await fs.readFile(file, 'utf8')
+    const codes = fileContent.split('\n').filter((l) => l.startsWith('sn1-'))
+    expect(codes.length).toBe(1)
+    expect(fileContent).toContain('已发送至您的邮箱')
+    expect(fileContent).toContain('本机目录整体泄露也无法动用资金')
+  })
+
+  it('saveRecoveryCodes：未发邮箱 → 本地 2 片 + 显著警告（方案 B）', async () => {
+    const share = { index: 2, bytes: new Uint8Array(32).fill(7) }
+    const code = encodeRecoveryCode(share)
+    const file = await saveRecoveryCodes([code, code], false)
+    const fileContent = await fs.readFile(file, 'utf8')
+    expect(fileContent).toContain('2 片均在本机')
+    expect(fileContent).toContain('整体泄露 = 资金丢失')
+    const codes = fileContent.split('\n').filter((l) => l.startsWith('sn1-'))
+    expect(codes.length).toBe(2)
   })
 
   it('restore 带 email：未配置 SMTP → backupStatus=skipped + note 提示', async () => {

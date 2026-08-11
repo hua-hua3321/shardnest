@@ -138,6 +138,11 @@ async function main() {
       }
       console.log('\n⚠️  新恢复码（旧恢复码请作废销毁）:')
       for (const code of result.recoveryCodes) console.log(`  ${code}`)
+      if (result.backupStatus === 'sent') {
+        console.log('\n📦 备份分布：片①设备（口令加密）+ 片②本地 + 片③已发邮箱——本机整体泄露无法动钱')
+      } else {
+        console.log('\n⚠️  当前备份分布：片①设备（口令加密）+ 片②③均在本机本地文件——本目录整体泄露即资金丢失，建议转移 1 片离线保存或配置邮箱备份')
+      }
       if (result.note) console.log(`\n📝 ${result.note}`)
       break
     }

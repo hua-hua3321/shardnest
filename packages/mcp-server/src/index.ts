@@ -79,6 +79,12 @@ export function createShardnestServer(
       // 专用路径：读取本地恢复码文件（2 片）→ 组合 → 导出（地址交叉校验兜底）
       try {
         const codes = await readRecoveryCodesFromFile()
+        if (codes.length < 2) {
+          return { content: [{ type: 'text' as const, text: JSON.stringify({
+            error: 'NEED_SECOND_RECOVERY_CODE',
+            message: '本地恢复码仅 1 片（另一片已发邮箱）：请用 CLI `shardnest mnemonic-export`（设备片+恢复码模式）导出',
+          }) }] }
+        }
         const result = await exportMnemonicFromCodes(codes[0], codes[1])
         if (result.address.toLowerCase() !== localAddress.toLowerCase()) {
           return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'ADDRESS_MISMATCH' }) }] }
@@ -188,6 +194,12 @@ export function createShardnestServer(
           result = await restoreFromMnemonic(passphrase, mnemonic, expected_address, email)
         } else {
           const codes = await readRecoveryCodesFromFile(recovery_file_path)
+          if (codes.length < 2) {
+            return { content: [{ type: 'text' as const, text: JSON.stringify({
+              error: 'NEED_SECOND_RECOVERY_CODE',
+              message: '本地恢复码仅 1 片（另一片已发邮箱）：请用 CLI `shardnest restore` 交互恢复，或提供含第二片的恢复码文件路径',
+            }) }] }
+          }
           result = await restoreWallet(
             passphrase,
             [codes[0], codes[1]],
