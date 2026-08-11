@@ -228,7 +228,7 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(file.version).toBe(2)
     expect(file.share.kdf).toBeDefined()
     expect(file.share.kdf.alg).toBe('scrypt')
-    expect(file.share.kdf.N).toBe(2 ** 16)
+    expect(file.share.kdf.N).toBe(2 ** 17) // O2: OWASP 下限
     // 解密仍正常（v2 用持久化参数派生）
     const out = JSON.parse(await signMessage(PASSPHRASE, r.recoveryCodes[0], 'o1'))
     expect(out.address).toBe(r.address)

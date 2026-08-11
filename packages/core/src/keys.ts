@@ -7,14 +7,14 @@
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
 import { scryptAsync } from '@noble/hashes/scrypt'
-import { bytesToHex } from '@noble/hashes/utils'
+import { bytesToHex, randomBytes } from '@noble/hashes/utils'
 
 /** secp256k1 曲线阶 n（私钥必须 < n） */
 const CURVE_ORDER = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141')
 
 /** KEK 派生参数（scrypt 高成本防暴力破解；2^16=64MB 内存，兼顾 Web 端） */
 /** scrypt 默认参数（本地单用户 CLI/MCP；O1 起随密文持久化，可平滑升级） */
-export const SCRYPT_OPTS = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 } as const
+export const SCRYPT_OPTS = { N: 2 ** 17, r: 8, p: 1, dkLen: 32 } as const // O2: OWASP 2023 下限（128MB），本地单用户可接受
 
 /** 持久化到密文的 KDF 元数据（RFC 8018 / age / 1Password 同款实践） */
 export interface KdfParams {
@@ -82,6 +82,11 @@ export function privateKeyToAddress(privateKey: Uint8Array): `0x${string}` {
 /**
  * 生成完整密钥对（私钥 + 公钥 + 地址）
  */
+/** 生成钱包根熵（32 字节 CSPRNG；O4A：分片对象=熵，助记词=熵的可逆编码） */
+export function generateEntropy(): Uint8Array {
+  return randomBytes(32)
+}
+
 export function generateKeyPair(): KeyPair {
   const privateKey = generatePrivateKey()
   const publicKey = privateKeyToPublicKey(privateKey)
