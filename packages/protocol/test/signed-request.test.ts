@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { issueSignedRequest, verifySignedRequest, canonicalString } from '../src/signed-request'
+import { issueSignedRequest, verifySignedRequest, canonicalBytes } from '../src/signed-request'
 import { generatePrivateKey, privateKeyToAddress } from '@wallet-service/core'
 
 /** 平台密钥对 */
@@ -93,9 +93,31 @@ describe('signed_request v1', () => {
     expect(verifySignedRequest(bad, platformAddr).error).toBe('INVALID_FORMAT')
   })
 
-  it('canonicalString 确定性', () => {
+  it('canonicalBytes 确定性 + length-prefixed 布局（O5）', () => {
     const a = makeOptions()
     const base = { v: 1 as const, action: a.action, intent_hash: a.intentHash, display: a.display, user_id: a.userId, wallet_address: a.walletAddress, nonce: a.nonce, expires_at: a.expiresAt }
-    expect(canonicalString(base)).toBe(canonicalString(base))
+    expect(canonicalBytes(base)).toEqual(canonicalBytes(base))
+    // v(1) + action(len4+6) + intent(len4+32) + display(len4+n) + user_id(len4+n) + addr(len4+20) + nonce(len4+n) + expires(8)
+    const bytes = canonicalBytes(base)
+    const view = new DataView(bytes.buffer, bytes.byteOffset)
+    expect(bytes[0]).toBe(1)
+    const actionLen = view.getUint32(1, false)
+    expect(actionLen).toBe(base.action.length)
+    const intentLen = view.getUint32(1 + 4 + actionLen, false)
+    expect(intentLen).toBe(32)
+    // 尾部 8 字节 = expires_at（大端）
+    const expOffset = bytes.length - 8
+    expect(view.getBigUint64(expOffset, false)).toBe(BigInt(base.expires_at))
+  })
+
+  it('canonicalBytes 跨语言一致（Unicode UTF-8 字节直拼，不转义）', () => {
+    const a = makeOptions()
+    const base = { v: 1 as const, action: a.action, intent_hash: a.intentHash, display: '任务说明·中文', user_id: 'user-中-1', wallet_address: a.walletAddress, nonce: a.nonce, expires_at: a.expiresAt }
+    const bytes = canonicalBytes(base)
+    const view = new DataView(bytes.buffer, bytes.byteOffset)
+    const actionLen = view.getUint32(1, false)
+    const offDisplay = 1 + 4 + actionLen + 4 + 32
+    const displayLen = view.getUint32(offDisplay, false)
+    expect(displayLen).toBe(new TextEncoder().encode('任务说明·中文').length)
   })
 })

@@ -1,7 +1,7 @@
 export {
   issueSignedRequest,
   verifySignedRequest,
-  canonicalString,
+  canonicalBytes,
   personalMessageHash,
   type SignedRequest,
   type SignedRequestAction,

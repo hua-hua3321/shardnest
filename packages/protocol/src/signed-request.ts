@@ -30,18 +30,43 @@ export interface SignedRequest {
   platform_signature: string
 }
 
-/** 参与签名的字段（v..expires_at）——JSON 数组序列化，杜绝字段值含分隔符的歧义 */
-export function canonicalString(req: Omit<SignedRequest, 'platform_signature'>): string {
-  return JSON.stringify([
-    req.v,
-    req.action,
-    req.intent_hash,
-    req.display,
-    req.user_id,
-    req.wallet_address,
-    req.nonce,
-    req.expires_at,
-  ])
+/**
+ * 参与签名的字段（v..expires_at）——O5: length-prefixed 确定性二进制（类 RLP）。
+ * 消除跨语言陷阱：UTF-8 字节 + 4 字节大端长度前缀，任何语言实现完全一致；
+ * 整数固定 8 字节大端（无 JSON 整数/浮点歧义）。
+ * 布局：
+ *   v(1B) | action(len4+utf8) | intent_hash(32B) | display(len4+utf8)
+ *   | user_id(len4+utf8) | wallet_address(20B) | nonce(len4+utf8) | expires_at(8B BE)
+ */
+export function canonicalBytes(req: Omit<SignedRequest, 'platform_signature'>): Uint8Array {
+  const enc = new TextEncoder()
+  const lp = (data: Uint8Array): Uint8Array => {
+    const out = new Uint8Array(4 + data.length)
+    new DataView(out.buffer).setUint32(0, data.length, false)
+    out.set(data, 4)
+    return out
+  }
+  const parts: Uint8Array[] = [
+    Uint8Array.of(req.v),
+    lp(enc.encode(req.action)),
+    lp(new Uint8Array(Buffer.from(req.intent_hash.slice(0, 2) === '0x' ? req.intent_hash.slice(2) : req.intent_hash, 'hex'))),
+    lp(enc.encode(req.display)),
+    lp(enc.encode(req.user_id)),
+    lp(new Uint8Array(Buffer.from(req.wallet_address.slice(0, 2) === '0x' ? req.wallet_address.slice(2) : req.wallet_address, 'hex'))),
+    lp(enc.encode(req.nonce)),
+  ]
+  const exp = new Uint8Array(8)
+  new DataView(exp.buffer).setBigUint64(0, BigInt(req.expires_at), false)
+  parts.push(exp)
+  let total = 0
+  for (const p of parts) total += p.length
+  const out = new Uint8Array(total)
+  let off = 0
+  for (const p of parts) {
+    out.set(p, off)
+    off += p.length
+  }
+  return out
 }
 
 /** EIP-191 个人消息哈希（与 verify-sdk recoverSigner 完全一致，两端必须同构） */
@@ -77,7 +102,7 @@ export function issueSignedRequest(options: IssueOptions, platformPrivateKey: Ui
     nonce: options.nonce,
     expires_at: options.expiresAt,
   }
-  const hash = personalMessageHash(new TextEncoder().encode(canonicalString(base)))
+  const hash = personalMessageHash(canonicalBytes(base))
   const sig = secp256k1.sign(hash, platformPrivateKey)
   const raw = sig.toCompactRawBytes()
   const out = new Uint8Array(65)
@@ -132,7 +157,7 @@ export function verifySignedRequest(
   if (sig.length !== 65) return { ok: false, error: 'BAD_SIGNATURE' }
   const { intent_hash, display, user_id, wallet_address } = r
   const base = { v: 1 as const, action: r.action as SignedRequestAction, intent_hash, display, user_id, wallet_address, nonce: r.nonce, expires_at: r.expires_at }
-  const recovered = recoverSigner(canonicalString(base), sig)
+  const recovered = recoverSigner(canonicalBytes(base), sig)
   if (recovered.toLowerCase() !== expectedPlatformAddress.toLowerCase()) {
     return { ok: false, error: 'BAD_SIGNATURE' }
   }
