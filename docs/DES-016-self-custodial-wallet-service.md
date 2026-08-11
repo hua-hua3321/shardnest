@@ -8,20 +8,18 @@ owner: 创始人
 last_reviewed: 2026-08-09
 updated: 2026-08-09
 tags: ['钱包', '开源', '独立项目', 'MCP', 'SSS', '自托管', '验签协议']
-related: ['DES-015', 'RES-005']
 ---
 
 # 独立开源钱包服务项目规划
 
-> **性质：** 独立项目规划（draft）。本项目与 EnvoyTask **完全独立**：
-> 独立仓库、独立发版、独立治理，仅通过公开协议（signed_request）与任何平台弱耦合。
-> 本规划文档暂存于 EnvoyTask 文档库仅用于记录决策，项目启动后迁移至新仓库。
+> **性质：** 独立项目规划（draft）。本项目是**独立开源项目**：
+> 独立仓库、独立发版、独立治理，仅通过公开协议（signed_request）与任何业务平台弱耦合。
 
 ---
 
 ## 1. 项目定位
 
-**一句话：** 开源、自托管、非托管的钱包基础设施服务——钱包生成、密钥分片、恢复、验签，以 MCP server / CLI / SDK 多形态交付，任何平台（不限于 EnvoyTask）只要符合公开协议即可接入。
+**一句话：** 开源、自托管、非托管的钱包基础设施服务——钱包生成、密钥分片、恢复、验签，以 MCP server / CLI / SDK 多形态交付，任何平台只要符合公开协议即可接入。
 
 | 维度 | 定位 |
 |------|------|
@@ -35,7 +33,7 @@ related: ['DES-015', 'RES-005']
 1. **责任彻底分离**：钱包责任归用户，业务平台零密钥材料——合规上最干净的「非托管」定论
 2. **通用基础设施**：任何平台（任务撮合、电商、社交）都可接入，复用同一钱包服务
 3. **生态复用**：开源可审计、可演进、可建立社区（对标 Phantom MCP / Coinbase Payments MCP 的生态位，但坚持自托管）
-4. **与 EnvoyTask 解耦**：互不干涉、独立发版、独立许可证，EnvoyTask 只是第一个接入方
+4. **平台无关性**：互不干涉、独立发版、独立许可证，任何平台按公开协议接入
 
 ## 3. 核心能力
 
@@ -153,7 +151,7 @@ related: ['DES-015', 'RES-005']
 ## 7. 独立仓库结构（规划）
 
 ```
-wallet-service/                    ← 独立 git 仓库（与 EnvoyTask 无任何代码共享）
+wallet-service/                    ← 独立 git 仓库（不与任何业务平台共享代码）
 ├── packages/
 │   ├── core/                      # 密钥生成、SSS 分片、恢复、reshare（纯逻辑，无 IO）
 │   ├── signer/                    # 签名守护进程（持钥、弹窗、IPC）
@@ -185,24 +183,24 @@ wallet-service/                    ← 独立 git 仓库（与 EnvoyTask 无任�
 | M2 形态 | signer 守护进程 + CLI + verify-sdk |
 | M3 协议 | signed_request v1 + MCP 薄壳 + 双闸门 |
 | M4 开源 | 独立仓库公开发布 + 文档 + 审计（先受限后全开源） |
-| M5 生态 | 接入 EnvoyTask（第一个接入方）+ 输出接入指南 |
+| M5 生态 | 接入首个业务平台 + 输出接入指南 |
 
-## 10. 与 EnvoyTask 的接入关系（仅协议耦合）
+## 10. 与业务平台的接入关系（仅协议耦合）
 
 ```
 用户 Agent 环境：
-├── MCP server ① EnvoyTask 平台    （业务 + 绑定 + 签发 signed_request）
+├── MCP server ① 业务平台        （业务 + 绑定 + 签发 signed_request）
 ├── MCP server ② wallet-service    （独立开源，签名/分片/恢复）
 └── 无直接调用：平台签请求 → Agent 转交钱包服务 → 签名回传
 ```
 
-- EnvoyTask 平台侧改造：退役 aa-wallet.ts（派生/预测），新增 wallet-binding（绑定/换绑/验签），提现改为验签确认
+- 业务平台侧改造：退役旧的派生/代建钱包逻辑，新增 wallet-binding（绑定/换绑/验签），提现改为验签确认
 - `agents` 表存 `wallet_address` + 公钥
 - 两个 MCP server 互不干涉，仅通过 signed_request 协议交互
 
 ---
 
-## 附：与现有文档的关系
+## 附：本仓库相关文档
 
-- [DES-015](client-side-wallet-creation.md)：钱包方案思路演进稿（本规划为最终定稿方向，DES-015 相关章节可标记 superseded）
-- [RES-005](../05-research/wallet-key-sharding-recovery.md)：成熟方案调研（SSS/TSS/社交恢复对比，支撑本规划技术选型）
+- [SECURITY.md](SECURITY.md)：安全模型（威胁矩阵、密钥生命周期、修复记录）
+- [protocol/README.md](../protocol/README.md)：signed_request v1 协议规范
