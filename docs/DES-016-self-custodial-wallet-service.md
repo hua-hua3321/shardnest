@@ -84,8 +84,10 @@ tags: ['钱包', '开源', '独立项目', 'MCP', 'SSS', '自托管', '验签协
 
 ### 4.1 薄壳 MCP + 签名守护进程（防恶意调用）
 
+> ⚠️ **路线图（P0-3），尚未实现**：当前为单进程——MCP server 消费解锁会话并在进程内实例化 `WalletVault`。当前安全承诺是「凭证不进 LLM」，而非「无密钥 MCP」。
+
 ```
-┌─ MCP server（无密钥薄壳）──────────────────┐
+┌─ MCP server（无密钥薄壳）[路线图] ────────┐
 │ 验平台背书 → 转发请求 → 返回结果（可被攻破） │
 └──────────────┬─────────────────────────────┘
                │ 本地 IPC（Unix socket / 随机端口 + token）
@@ -155,7 +157,7 @@ wallet-service/                    ← 独立 git 仓库（不与任何业务平
 ├── packages/
 │   ├── core/                      # 密钥生成、SSS 分片、恢复、reshare（纯逻辑，无 IO）
 │   ├── signer/                    # 签名守护进程（持钥、弹窗、IPC）
-│   ├── mcp-server/                # MCP 薄壳（无密钥）
+│   ├── mcp-server/                # MCP 薄壳（无密钥）[路线图 P0-3；当前：同进程，凭证不进 LLM]
 │   ├── cli/                       # 命令行形态（人工场景）
 │   └── verify-sdk/                # 平台侧验签 SDK（verify-only，无密钥逻辑）
 ├── protocol/                      # signed_request v1 规范（JSON Schema + 文档）

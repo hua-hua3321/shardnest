@@ -140,7 +140,7 @@ signer                              WalletVault (sole key holder) · approval ga
 cli                                 commands · recovery-code CRC · SMTP backup
 verify-sdk                          platform-side EIP-191 verification (verify-only, zero keys)
 protocol                            signed_request v1 — platform endorsement issue/verify
-mcp-server                          stateless shell (no keys) wiring the double gates
+mcp-server                          shell (credentials never enter LLM; standalone keyless process is roadmap P0-3) wiring the double gates
 ```
 
 Cryptographic invariants are documented in [AGENTS.md](AGENTS.md) — read it before touching crypto code (GF(2^8) generator must be 3, EIP-191 hashing must stay byte-identical in three places, recovery-code CRC covers `index:hex`, memory zeroing on all paths).

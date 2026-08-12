@@ -47,7 +47,7 @@ cli（命令实现，MCP 的库 API 经 src/api.ts 的 exports 字段暴露）
   └─ index.ts     CLI 入口（掩码输入 promptSecret）
 verify-sdk（平台侧验签，verify-only 零密钥）
 protocol（signed_request v1：平台背书签发/钱包验签；canonicalBytes length-prefixed 二进制）
-mcp-server（薄壳，无密钥：6 工具 + 双闸门接线）
+mcp-server（薄壳：凭证不进 LLM，6 工具 + 双闸门接线；独立无密钥进程为路线图 P0-3）
 ```
 
 ### 凭证隔离（本仓库最核心的安全架构，勿破坏）

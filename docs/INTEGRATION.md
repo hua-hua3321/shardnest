@@ -66,7 +66,7 @@ const request = issueSignedRequest({
 1. 闸门 1：钱包服务验签背书（`verifySignedRequest`）——非平台签发即拒绝
 2. 闸门 2：宿主 approval（默认仅放行 `sign_message`；其他动作需宿主配置）
 3. `wallet_address` 与本地钱包一致校验
-4. 消费解锁令牌（单次）→ 本地签名 `action:intent_hash` → 返回 `{ address, signature }`
+4. 消费解锁令牌（单次）→ 本地签名域分离请求上下文（绑定 `wallet_address`/`platform_address`/`action`/`intent_hash`/`nonce`/`expires_at`/`user_id`）→ 返回 `{ address, signature }`
 
 ## 第四步：平台验签（verify-sdk）
 

@@ -76,9 +76,13 @@ tags: ['wallet', 'open-source', 'independent-project', 'MCP', 'SSS', 'self-custo
 
 ### 4.1 Thin-shell MCP + Signing Daemon (anti-abuse)
 
+> ⚠️ **Roadmap (P0-3), not yet implemented**: current build is a single process —
+> the MCP server consumes unlock sessions and instantiates `WalletVault` in-process.
+> The security promise today is "credentials never enter LLM", not "keyless MCP".
+
 ```
-┌─ MCP server (keyless thin shell) ──────────────┐
-│ verify endorsement → forward → return result    │  (compromisable, yields no keys)
+┌─ MCP server (keyless thin shell) [roadmap] ──┐
+│ verify endorsement → forward → return result   │  (compromisable, yields no keys)
 └────────────────────┬───────────────────────────┘
                      │ local IPC
 ┌────────────────────▼───────────────────────────┐
@@ -119,7 +123,9 @@ issueSignedRequest(                         verifySignedRequest(
   action, intent_hash, display,               request, expected_platform_address
   user_id, wallet_address, nonce,           → endorsement + nonce/expiry/field checks
   expires_at, platform_signature)          → user confirmation (approval)
-                                            → EIP-191 signature on action:intent_hash
+                                            → EIP-191 signature on domain-separated request context
+                                              (wallet_address | platform_address | action | intent_hash
+                                              | nonce | expires_at | user_id, via protocol.walletSignMessage)
                                             → platform verifies via verify-sdk
 ```
 
@@ -146,7 +152,7 @@ wallet-service/                    ← independent git repo (no code shared with
 ├── packages/
 │   ├── core/                      # key generation, SSS split/recover/reshare (pure logic, no IO)
 │   ├── signer/                    # signing daemon (key holder, dialogs, token sessions)
-│   ├── mcp-server/                # MCP thin shell (no keys)
+│   ├── mcp-server/                # MCP thin shell (no keys) [roadmap P0-3; current: same-process, credentials never enter LLM]
 │   ├── cli/                       # CLI form (human scenarios; i18n zh/en by system language)
 │   └── verify-sdk/                # platform-side verify SDK (verify-only, no key logic)
 ├── protocol/                      # signed_request v1 spec (JSON Schema + docs)
