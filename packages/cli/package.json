@@ -4,7 +4,10 @@
   "type": "module",
   "main": "dist/index.js",
   "exports": {
-    ".": "./dist/api.js"
+    ".": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -19,7 +22,7 @@
     "@wallet-service/signer": "workspace:*",
     "nodemailer": "^9.0.5"
   },
-  "types": "dist/index.d.ts",
+  "types": "dist/api.d.ts",
   "files": [
     "dist"
   ]

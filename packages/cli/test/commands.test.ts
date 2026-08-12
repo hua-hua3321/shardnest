@@ -490,6 +490,75 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(names.filter((n) => !n.startsWith('unlock'))).toEqual([])
   })
 
+  it('P1 wipe 不跟随 symlink——残留命名指向目录外文件时仅删链接、不覆写目标', async () => {
+    await initWallet(PASSPHRASE, undefined, true)
+    // 外部文件（钱包目录外）
+    const outside = path.join(TEST_HOME, 'outside.txt')
+    await fs.mkdir(TEST_HOME, { recursive: true })
+    await fs.writeFile(outside, 'sensitive-outside-content')
+    // 钱包目录内创建符合残留命名规则的 symlink → 外部文件
+    const link = path.join(getHomeDir(), 'recovery-codes.txt.bak-deadbeef-0000-0000-0000-000000000002')
+    await fs.symlink(outside, link)
+    await wipeWallet(WIPE_CONFIRM_PHRASE, 'all')
+    // 外部文件必须原封不动（未被随机字节覆写）
+    expect(await fs.readFile(outside, 'utf8')).toBe('sensitive-outside-content')
+    // 链接本身已被删除
+    await expect(fs.lstat(link)).rejects.toThrow()
+  })
+
+  it('P1 wipe 删除失败不静默——返回错误而非「成功」清单', async () => {
+    await initWallet(PASSPHRASE)
+    const home = getHomeDir()
+    // 收紧目录权限使 unlink 失败（用户目录不可写）
+    await fs.chmod(home, 0o500)
+    try {
+      await expect(wipeWallet(WIPE_CONFIRM_PHRASE, 'all')).rejects.toThrow(/删除失败/)
+    } finally {
+      await fs.chmod(home, 0o700).catch(() => {})
+    }
+    // 密钥材料仍在（未被误报成功删除）
+    expect(await fs.readFile(path.join(home, 'metadata.json'), 'utf8')).toBeTruthy()
+  })
+
+  it('P1 staging 写入后 sync 失败 → 明文 staging 被清理（无 .tmp- 残留）', async () => {
+    await initWallet(PASSPHRASE, undefined, true)
+    // 模拟 recovery-codes.txt staging 的 sync 抛错（文件已写入、数据未落盘）
+    const realOpen = fs.open.bind(fs)
+    let fail = false
+    fs.open = (async (file: string | URL, ...rest: unknown[]) => {
+      const fh = (await (realOpen as (f: string | URL, ...r: unknown[]) => Promise<Awaited<ReturnType<typeof fs.open>>>)(file, ...rest)) as Awaited<ReturnType<typeof fs.open>> & { sync: () => Promise<void> }
+      if (fail && String(file).includes('.tmp-') && String(file).includes('recovery-codes')) {
+        const origSync = fh.sync.bind(fh)
+        fh.sync = async () => {
+          await origSync()
+          throw new Error('sync failed (simulated)')
+        }
+      }
+      return fh
+    }) as typeof fs.open
+    try {
+      fail = true
+      await expect(initWallet('another-passphrase-456!', undefined, true, true)).rejects.toThrow('sync failed')
+    } finally {
+      fail = false
+      fs.open = realOpen
+    }
+    // 明文 staging 已清理，无 .tmp- 残留
+    const names = await fs.readdir(getHomeDir())
+    expect(names.some((n) => n.includes('.tmp-'))).toBe(false)
+  })
+
+  it('P1 legacy sn1 新设备恢复（无 metadata 无 expectedAddress）→ 拒绝（防跨钱包混用）', async () => {
+    const s1 = { index: 1, bytes: new Uint8Array(32).fill(1) }
+    const s2 = { index: 2, bytes: new Uint8Array(32).fill(2) }
+    const c1 = encodeRecoveryCode(s1) // 钱包 A 的 sn1
+    const c2 = encodeRecoveryCode(s2) // 钱包 B 的 sn1（不同分片）
+    // 新设备：无本地 metadata、未传期望地址 → 必须拒绝
+    await expect(restoreWallet(PASSPHRASE, [c1, c2])).rejects.toThrow(/旧版恢复码/)
+    // 提供期望地址后正常执行到地址校验（组合出的地址与期望不符 → 报不一致）
+    await expect(restoreWallet(PASSPHRASE, [c1, c2], '0x0000000000000000000000000000000000000000')).rejects.toThrow(/不一致/)
+  })
+
   it('P1-3：损坏 metadata → initWallet 硬失败（不视为"无钱包"绕过防覆盖）', async () => {
     await initWallet(PASSPHRASE)
     // 篡改 metadata 为损坏 JSON → readOldAddress 重抛（非 ENOENT），initWallet 拒绝

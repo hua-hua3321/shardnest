@@ -50,12 +50,19 @@ const mnemonicFile = () => path.join(getHomeDir(), 'mnemonic.txt')
 async function writeFileAtomic(file: string, content: string, mode: number): Promise<string> {
   await fs.mkdir(path.dirname(file), { recursive: true })
   const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${randomUUID()}`)
-  const fh = await fs.open(tmp, 'wx', mode) // O_CREAT|O_EXCL
+  let fh: Awaited<ReturnType<typeof fs.open>>
   try {
-    await fh.writeFile(content)
-    await fh.sync() // 数据落盘后才 rename（崩溃一致性）
-  } finally {
-    await fh.close().catch(() => {})
+    fh = await fs.open(tmp, 'wx', mode) // O_CREAT|O_EXCL
+    try {
+      await fh.writeFile(content)
+      await fh.sync() // 数据落盘后才 rename（崩溃一致性）
+    } finally {
+      await fh.close().catch(() => {})
+    }
+  } catch (err) {
+    // 写入/sync 失败：staging 可能已含明文——安全删除而非普通 rm（防明文残留）
+    await secureDelete(tmp).catch(() => {})
+    throw err
   }
   await fs.rename(tmp, file)
   await fs.chmod(file, mode).catch(() => {}) // 防已有文件保留宽松权限
@@ -72,6 +79,8 @@ async function writeFileAtomic(file: string, content: string, mode: number): Pro
  * 的混合钱包。备份使 rename 阶段失败可可靠回滚到旧状态。
  */
 async function commitAtomically(files: { file: string; content: string; mode: number }[]): Promise<void> {
+  // 启动前清理历史 staging（上次异常中断残留的 .tmp-*，可能含明文恢复码/助记词）
+  await cleanupStaleStaging()
   const tmps: { tmp: string; final: string }[] = []
   const backups: { bak: string; final: string }[] = [] // 已存在目标文件的备份（rename 前收集）
   let renamed = 0 // 已成功切换的 staging 数（回滚依据）
@@ -81,14 +90,22 @@ async function commitAtomically(files: { file: string; content: string; mode: nu
       // 中风险: 钱包目录收紧 0700（默认 umask 可能留 0755）
       await fs.chmod(path.dirname(f.file), 0o700).catch(() => {})
       const tmp = path.join(path.dirname(f.file), `.${path.basename(f.file)}.tmp-${randomUUID()}`)
-      const fh = await fs.open(tmp, 'wx', f.mode)
-      try {
-        await fh.writeFile(f.content)
-        await fh.sync()
-      } finally {
-        await fh.close().catch(() => {})
-      }
+      // ⚠️ open 前立即登记——写入/sync/close 失败时也必须被清理（防明文 staging 残留）
       tmps.push({ tmp, final: f.file })
+      let fh: Awaited<ReturnType<typeof fs.open>>
+      try {
+        fh = await fs.open(tmp, 'wx', f.mode)
+        try {
+          await fh.writeFile(f.content)
+          await fh.sync()
+        } finally {
+          await fh.close().catch(() => {})
+        }
+      } catch (err) {
+        // 该 staging 可能已含明文（恢复码/助记词）——安全删除而非普通 rm
+        await secureDelete(tmp).catch(() => {})
+        throw err
+      }
     }
     // 备份已存在的目标文件（rename 原子；备份失败前目标未被触碰）
     for (const t of tmps) {
@@ -117,8 +134,8 @@ async function commitAtomically(files: { file: string; content: string; mode: nu
     for (let i = 0; i < renamed; i++) {
       if (!restored.has(tmps[i].final)) await fs.rm(tmps[i].final, { force: true }).catch(() => {})
     }
-    // 清理所有残留 staging
-    for (const t of tmps) await fs.rm(t.tmp, { force: true }).catch(() => {})
+    // 清理所有残留 staging（可能含明文——安全删除）
+    for (const t of tmps) await secureDelete(t.tmp).catch(() => {})
     throw err
   }
   // 成功路径：安全删除旧备份（覆写 3 遍——旧材料含明文恢复码/助记词，禁止普通 rm）。
@@ -475,6 +492,15 @@ export async function restoreWallet(
   validatePassphrase(passphrase)
   const shares = recoveryCodes.map(decodeRecoveryCode)
   assertSameShareSet(shares) // P1-2: 混用两个钱包的恢复码 → 批次不一致 → 拒绝
+  // P1（全仓审计）：全 sn1（legacy，无批次标识）时，若无本地可信 metadata 且未传
+  // expectedAddress——无法确认两片来自同一钱包，新设备混用会静默恢复出「第三个钱包」，拒绝
+  const isLegacyOnly = shares.every((s) => s.setId === undefined)
+  if (isLegacyOnly) {
+    const want = expectedAddress ?? (await readOldAddress())
+    if (!want) {
+      throw new Error('旧版恢复码（sn1）缺少批次标识，无法自动确认来自同一钱包；新设备恢复必须提供期望地址（expectedAddress）')
+    }
+  }
   const fresh = reshareShares(shares, { shares: 3, threshold: 2 })
   const enc = await encryptShare(fresh[0], passphrase)
   const entropy = combineShares([fresh[0], fresh[1]]) // O4A: 重组根熵
@@ -638,35 +664,52 @@ export const WIPE_CONFIRM_PHRASE = 'PERMANENT DELETE'
 /**
  * 安全删除单个文件：随机数据覆写 3 遍（尽力抹除，防常规恢复）→ unlink。
  * SSD 闪存级残余需取证设备才能读取，普通威胁模型下不可恢复。
+ * 安全约束（全仓审计）：
+ * - symlink 只 unlink 链接本身，绝不跟随/覆写目标（防目录外文件被破坏）
+ * - 非普通文件（目录/FIFO/socket/设备）拒绝删除
+ * - 硬链接（nlink>1）仅删除当前目录项，不覆写（防破坏其他链接指向的内容）
+ * - 打开使用 O_NOFOLLOW + 打开后核验 dev/inode（防检查与打开之间被替换）
+ * - 删除（unlink）失败抛错——调用方必须如实报告，不得静默吞掉
  */
 async function secureDelete(file: string): Promise<void> {
-  let overwritten = false
-  try {
-    const stat = await fs.stat(file)
-    if (stat.size > 0) {
-      const fh = await fs.open(file, 'r+')
-      try {
-        for (let pass = 0; pass < 3; pass++) {
-          let written = 0
-          while (written < stat.size) {
-            // 每个位置生成新随机块（防模式可预测）+ 分块防大文件内存
-            const chunk = randomBytes(Math.min(64 * 1024, stat.size - written))
-            const n = await fh.write(chunk, 0, chunk.length, written)
-            written += typeof n === 'number' ? n : n.bytesWritten
-          }
-        }
-        await fh.sync().catch(() => {})
-        overwritten = true
-      } finally {
-        await fh.close().catch(() => {}) // 保证句柄释放
-      }
-    }
-  } catch (err) {
-    // 覆写失败不静默——提示后仍删除（调用方知情，避免虚假的'安全删除'印象）
-    console.warn(`覆写失败 ${file}: ${(err as Error).message}，仅执行普通删除`)
+  const lst = await fs.lstat(file)
+  if (lst.isSymbolicLink()) {
+    // 符号链接：只删链接本身，绝不跟随
+    await fs.unlink(file)
+    return
   }
-  await fs.rm(file, { force: true })
-  void overwritten
+  if (!lst.isFile()) {
+    throw new Error(`拒绝删除非普通文件（目录/FIFO/socket/设备）: ${path.basename(file)}`)
+  }
+  if (lst.nlink > 1) {
+    // 硬链接：覆写会同时破坏所有指向同一 inode 的其他目录项，仅删除当前项
+    await fs.unlink(file)
+    return
+  }
+  if (lst.size > 0) {
+    // O_NOFOLLOW：即使 lstat 后路径被替换为 symlink，open 也拒绝跟随
+    const fh = await fs.open(file, fs.constants.O_NOFOLLOW | fs.constants.O_RDWR)
+    try {
+      // 打开后核验 dev/inode——防检查与打开之间被替换（TOCTOU）
+      const st = await fh.stat()
+      if (st.dev !== lst.dev || st.ino !== lst.ino) {
+        throw new Error(`文件在删除前被替换（inode 不一致），已中止: ${path.basename(file)}`)
+      }
+      for (let pass = 0; pass < 3; pass++) {
+        let written = 0
+        while (written < lst.size) {
+          // 每个位置生成新随机块（防模式可预测）+ 分块防大文件内存
+          const chunk = randomBytes(Math.min(64 * 1024, lst.size - written))
+          const n = await fh.write(chunk, 0, chunk.length, written)
+          written += typeof n === 'number' ? n : n.bytesWritten
+        }
+      }
+      await fh.sync().catch(() => {})
+    } finally {
+      await fh.close().catch(() => {}) // 保证句柄释放
+    }
+  }
+  await fs.unlink(file)
 }
 
 /** wipe 范围：all=本机全部密钥材料 / saved=仅'需用户保存'的明文备份（恢复码+助记词） */
@@ -705,12 +748,27 @@ export async function listSavedFiles(): Promise<string[]> {
 /** 受控残留命名模式：事务备份 `.bak-<uuid>` 与 staging `.tmp-<uuid>`（防枚举到无关文件） */
 const RESIDUAL_PATTERN = /\.(bak|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
+/** 清理钱包目录中受控残留 staging（.tmp-<uuid>）——防上次异常中断遗留明文恢复码/助记词 */
+async function cleanupStaleStaging(): Promise<void> {
+  try {
+    const names = await fs.readdir(getHomeDir())
+    for (const n of names) {
+      if (RESIDUAL_PATTERN.test(n)) {
+        await secureDelete(path.join(getHomeDir(), n)).catch(() => {})
+      }
+    }
+  } catch {
+    // 目录不存在等——无需清理
+  }
+}
+
 /**
  * 彻底删除（不可恢复，覆写 3 遍 + unlink）：
  * - scope='saved'：仅删'需用户保存'的明文备份（recovery-codes.txt / mnemonic.txt）——
  *   本机不再有可被窃取的明文恢复码/助记词；钱包本体（设备片）保留，口令解锁继续可用
  * - scope='all'：删除本机全部密钥材料（device-share / recovery / mnemonic / metadata / unlock 会话）
  * - 两档均枚举删除受控残留（.bak-* 旧材料备份 / .tmp-* staging）——防「wipe 后旧明文仍可读」
+ * - 删除失败不静默：仅 ENOENT（不存在）可跳过，其余错误聚合抛出（防「报告成功但密钥材料仍在」）
  * - 执行前必须输入确认短语 WIPE_CONFIRM_PHRASE（防误删）
  * - ⚠️ 调用前必须提醒用户：确认已保存恢复码/助记词（用户保存的那一份是唯一恢复途径）
  * @returns removed 为 basename 清单（展示用）
@@ -720,29 +778,34 @@ export async function wipeWallet(confirmPhrase: string, scope: WipeScope = 'all'
     throw new Error('确认短语不匹配，已中止（防止误删）')
   }
   const removed: string[] = []
+  const failures: { file: string; reason: string }[] = []
+  const tryDelete = async (f: string, label: string) => {
+    try {
+      await secureDelete(f)
+      removed.push(label)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return // 仅「不存在」可跳过
+      failures.push({ file: label, reason: (err as Error).message })
+    }
+  }
   const targets = scope === 'saved'
     ? [recoveryFile(), mnemonicFile()]
     : [metaFile(), deviceFile(), recoveryFile(), mnemonicFile()]
   for (const f of targets) {
-    try {
-      await fs.stat(f)
-      await secureDelete(f)
-      removed.push(path.basename(f))
-    } catch {
-      // 不存在则跳过
-    }
+    await tryDelete(f, path.basename(f))
   }
   // 枚举受控残留：.bak-* 旧材料备份（含明文恢复码/助记词旧版）+ .tmp-* staging——两档均清理
   try {
     const names = await fs.readdir(getHomeDir())
     for (const n of names) {
       if (RESIDUAL_PATTERN.test(n)) {
-        await secureDelete(path.join(getHomeDir(), n))
-        removed.push(n)
+        await tryDelete(path.join(getHomeDir(), n), n)
       }
     }
-  } catch {
-    // 目录不存在等——无需清理
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      failures.push({ file: '钱包目录枚举', reason: (err as Error).message })
+    }
   }
   if (scope === 'all') {
     // unlock/ 目录（令牌会话）
@@ -750,14 +813,20 @@ export async function wipeWallet(confirmPhrase: string, scope: WipeScope = 'all'
       const dir = getUnlockDir()
       const entries = await fs.readdir(dir)
       for (const e of entries) {
-        const f = path.join(dir, e)
-        await secureDelete(f)
-        removed.push(path.basename(f))
+        await tryDelete(path.join(dir, e), `unlock/${e}`)
       }
-      await fs.rmdir(dir).catch(() => {})
-    } catch {
-      // 无 unlock 目录
+      await fs.rmdir(dir).catch((err) => {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') failures.push({ file: 'unlock/', reason: (err as Error).message })
+      })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        failures.push({ file: 'unlock/', reason: (err as Error).message })
+      }
     }
+  }
+  // 任一目标删除失败 → 抛错（不返回「成功」清单），CLI/MCP 必须如实呈现失败
+  if (failures.length > 0) {
+    throw new Error(`删除失败（部分密钥材料未清除）：${failures.map((f) => `${f.file}: ${f.reason}`).join('；')}`)
   }
   return { removed }
 }

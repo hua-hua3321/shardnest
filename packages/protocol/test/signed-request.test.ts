@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { issueSignedRequest, verifySignedRequest, canonicalBytes } from '../src/signed-request'
+import { issueSignedRequest, verifySignedRequest, canonicalBytes, walletSignMessage } from '../src/signed-request'
 import { generatePrivateKey, privateKeyToAddress } from '@wallet-service/core'
 
 /** 平台密钥对 */
@@ -22,6 +22,42 @@ function makeOptions(overrides: Partial<Parameters<typeof issueSignedRequest>[0]
     ...overrides,
   }
 }
+
+describe('walletSignMessage v2：length-prefixed 无字段边界碰撞', () => {
+  const base = {
+    action: 'withdraw_confirm' as const,
+    intent_hash: '0x' + 'cd'.repeat(32),
+    wallet_address: '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf',
+    platform_address: platformAddr,
+    nonce: 'nonce-abcdefghij',
+    expires_at: 2000000000,
+    user_id: 'user-alice',
+  }
+
+  it('冒号字符字段重排不再碰撞（旧版 : 拼接可构造同消息）', () => {
+    // 旧格式下：A 的 nonce 吞掉分隔符与 expires_at，B 的 user_id 补回——两请求生成同一字符串
+    const a = { ...base, nonce: 'nonce-abcdefghij:2100000000', expires_at: 2100000000, user_id: 'user-alice' }
+    const b = { ...base, nonce: 'nonce-abcdefghij', expires_at: 2000000000, user_id: '2100000000:user-alice' }
+    expect(Buffer.from(walletSignMessage(a)).toString('hex')).not.toBe(Buffer.from(walletSignMessage(b)).toString('hex'))
+  })
+
+  it('空字符串与 Unicode 字段边界清晰', () => {
+    const a = { ...base, user_id: '', nonce: 'n:1' }
+    const b = { ...base, user_id: '1', nonce: 'n:' }
+    expect(Buffer.from(walletSignMessage(a)).toString('hex')).not.toBe(Buffer.from(walletSignMessage(b)).toString('hex'))
+    const u = { ...base, user_id: '用户-测试', nonce: '中文冒号：分隔' }
+    expect(walletSignMessage(u).length).toBeGreaterThan(0)
+  })
+
+  it('单字段变化必然改变消息（expires_at/user_id/platform 均绑定）', () => {
+    const ref = Buffer.from(walletSignMessage(base)).toString('hex')
+    expect(Buffer.from(walletSignMessage({ ...base, expires_at: base.expires_at + 1 })).toString('hex')).not.toBe(ref)
+    expect(Buffer.from(walletSignMessage({ ...base, user_id: 'other-user' })).toString('hex')).not.toBe(ref)
+    expect(Buffer.from(walletSignMessage({ ...base, platform_address: otherAddr })).toString('hex')).not.toBe(ref)
+    expect(Buffer.from(walletSignMessage({ ...base, wallet_address: '0x0000000000000000000000000000000000000000' })).toString('hex')).not.toBe(ref)
+    expect(Buffer.from(walletSignMessage({ ...base, action: 'sign_message' as const })).toString('hex')).not.toBe(ref)
+  })
+})
 
 describe('signed_request v1', () => {
   it('平台签发 → 钱包验签通过（闭环）', () => {
