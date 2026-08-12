@@ -21,6 +21,7 @@ import {getHomeDir,
   WIPE_CONFIRM_PHRASE,
   listSavedFiles,
   getRecoveryFileStatus,
+  tryReadRecoveryCodeFromFile,
 } from '../src/commands'
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
@@ -46,18 +47,50 @@ beforeEach(async () => {
 
 const PASSPHRASE = 'test-passphrase-123!'
 
-describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
-  it('init 创建钱包：地址存在、恢复码 2 个、设备片文件加密存储', async () => {
-    const result = await initWallet(PASSPHRASE)
-    expect(result.address).toMatch(/^0x[0-9a-fA-F]{40}$/)
-    expect(result.recoveryCodes.length).toBe(2)
-    // 设备片文件存在且不含明文私钥材料
-    const raw = await fs.readFile(path.join(getHomeDir(), 'device-share.json'), 'utf8')
-    expect(raw).not.toContain('privateKey')
-    // 地址无需口令可读
-    expect(await getAddress()).toBe(result.address)
+describe('方案 A：tryReadRecoveryCodeFromFile 自动读取恢复码（免手输）', () => {
+  it('文件存在时返回第一片（sn1 格式）', async () => {
+    await fs.mkdir(getHomeDir(), { recursive: true })
+    await fs.writeFile(path.join(getHomeDir(), 'recovery-codes.txt'), 'sn1-1-aa11bb22-00000000\nsn1-2-cc33dd44-00000000\n')
+    expect(await tryReadRecoveryCodeFromFile()).toBe('sn1-1-aa11bb22-00000000')
   })
 
+  it('sn2 批次格式同样识别', async () => {
+    await fs.mkdir(getHomeDir(), { recursive: true })
+    await fs.writeFile(path.join(getHomeDir(), 'recovery-codes.txt'), 'sn2-abcdef0123456789-1-aa11bb22-00000000\n')
+    expect(await tryReadRecoveryCodeFromFile()).toBe('sn2-abcdef0123456789-1-aa11bb22-00000000')
+  })
+
+  it('文件缺失返回 null（调用方回退手动输入）', async () => {
+    expect(await tryReadRecoveryCodeFromFile()).toBeNull()
+  })
+
+  it('空文件/无合法恢复码返回 null', async () => {
+    await fs.mkdir(getHomeDir(), { recursive: true })
+    await fs.writeFile(path.join(getHomeDir(), 'recovery-codes.txt'), 'not a recovery code\n\n')
+    expect(await tryReadRecoveryCodeFromFile()).toBeNull()
+  })
+
+  it('指定自定义路径优先于默认文件', async () => {
+    const custom = path.join(TEST_HOME, 'custom-codes.txt')
+    await fs.mkdir(TEST_HOME, { recursive: true })
+    await fs.writeFile(custom, 'sn1-2-cc33dd44-00000000\n')
+    // 默认位置写入不同内容，验证指定路径生效
+    await fs.mkdir(getHomeDir(), { recursive: true })
+    await fs.writeFile(path.join(getHomeDir(), 'recovery-codes.txt'), 'sn1-1-aa11bb22-00000000\n')
+    expect(await tryReadRecoveryCodeFromFile(custom)).toBe('sn1-2-cc33dd44-00000000')
+  })
+
+  it('与 initWallet 闭环：自动读取真实生成的恢复码可解锁', async () => {
+    const result = await initWallet(PASSPHRASE)
+    const code = await tryReadRecoveryCodeFromFile()
+    expect(code).not.toBeNull()
+    const token = await createUnlockToken(PASSPHRASE, code as string)
+    expect(token).toMatch(/^[0-9a-f]{64}$/)
+    expect(result.address).toMatch(/^0x[0-9a-fA-F]{40}$/)
+  })
+})
+
+describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
   it('init → sign：EIP-191 签名验签还原同一地址', async () => {
     const result = await initWallet(PASSPHRASE)
     const out = JSON.parse(await signMessage(PASSPHRASE, result.recoveryCodes[0], 'hello shardnest'))

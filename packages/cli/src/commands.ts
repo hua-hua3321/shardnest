@@ -500,6 +500,19 @@ export async function readRecoveryCodesFromFile(filePath?: string): Promise<stri
   return codes
 }
 
+/** 方案 A：自动从恢复码文件读取第一片（CLI unlock/sign 免手输恢复码）。
+ * 文件缺失/为空/无合法恢复码 → 返回 null，由调用方回退手动输入。
+ * 安全语义：与手动输入该文件内容在威胁模型上等价（同用户权限恶意软件均可读），
+ * 不改变双因素分离引导（emailed 状态提示仍保留）。 */
+export async function tryReadRecoveryCodeFromFile(filePath?: string): Promise<string | null> {
+  try {
+    const codes = await readRecoveryCodesFromFile(filePath)
+    return codes[0] ?? null
+  } catch {
+    return null
+  }
+}
+
 /** 导出 24 词助记词（模式 A：设备片 + 1 恢复码）——任意 2 片即可随时导出
  * ⚠️ 助记词=完整私钥（单点），导出前必须提示风险
  */

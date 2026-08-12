@@ -9,7 +9,7 @@
  *   shardnest restore     # 输入 2 个恢复码恢复（新设备/口令丢失）
  */
 import * as readline from 'node:readline'
-import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getRecoveryFileStatus } from './commands'
+import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getRecoveryFileStatus, tryReadRecoveryCodeFromFile } from './commands'
 import { createPassphraseSession } from '@wallet-service/signer'
 import { t } from './i18n'
 
@@ -65,6 +65,38 @@ async function printRecoverySourceGuide() {
   }
 }
 
+/** 恢复码来源选项解析（unlock/sign/mnemonic-export 共享）：
+ * --manual 强制手动输入；--recovery-file <path> 指定恢复码文件（默认 recovery-codes.txt） */
+function parseRecoveryOptions(args: string[]): { manual: boolean; recoveryFile?: string } {
+  let manual = false
+  let recoveryFile: string | undefined
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (a === '--manual') manual = true
+    else if (a === '--recovery-file') recoveryFile = args[++i]
+  }
+  return { manual, recoveryFile }
+}
+
+/** 恢复码获取（方案 A：免手输）：
+ * 1) --recovery-file 指定文件 > 2) 默认自动读取 recovery-codes.txt > 3) 手动输入兑底
+ * emailed 状态自动读取成功后仍提示双因素分离建议（尊重原安全引导） */
+async function promptRecoveryCode(opts: { manual: boolean; recoveryFile?: string }): Promise<string> {
+  if (!opts.manual) {
+    const auto = await tryReadRecoveryCodeFromFile(opts.recoveryFile)
+    if (auto) {
+      const src = opts.recoveryFile ?? 'recovery-codes.txt'
+      console.log('  📄 ' + t(`已自动读取恢复码（来源: ${src}；如需手动输入请用 --manual）`, `Auto-loaded recovery code (source: ${src}; use --manual to type it in)`))
+      if ((await getRecoveryFileStatus()) === 'emailed') {
+        console.log('    ' + t('提示：本地片②已使用；若需双因素分离，可用 --manual 从邮箱输入片③', 'Note: local share ② used; for 2FA separation, use --manual to type share ③ from email'))
+      }
+      return auto
+    }
+  }
+  await printRecoverySourceGuide()
+  return promptSecret(t('恢复码（掩码输入）: ', "Recovery code (masked): "))
+}
+
 async function main() {
   const [cmd, ...args] = process.argv.slice(2)
   switch (cmd) {
@@ -84,9 +116,9 @@ async function main() {
       break
     }
     case 'unlock': {
+      const ropts = parseRecoveryOptions(args)
       const passphrase = await promptSecret(t('口令: ', "Passphrase: "))
-      await printRecoverySourceGuide()
-      const code = await promptSecret(t('恢复码（掩码输入）: ', "Recovery code (masked): "))
+      const code = await promptRecoveryCode(ropts)
       const token = await createUnlockToken(passphrase, code)
       console.log(t('\n🔓 解锁令牌（5 分钟有效，单次使用）：请粘贴到 MCP 工具调用中，勿转发给他人/其他平台', '\n🔓 Unlock token (valid 5 min, single-use): paste into the MCP tool call; do not forward to others/other platforms'))
       console.log(token)
@@ -128,11 +160,23 @@ async function main() {
       break
     }
     case 'sign': {
-      if (args.length === 0) throw new Error(t('用法: shardnest sign <message>', "Usage: shardnest sign <message>"))
+      const ropts = parseRecoveryOptions(args)
+      // 过滤选项参数（含 --recovery-file 的值），剩余拼接为签名消息
+      const msgParts: string[] = []
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i]
+        if (a === '--manual') continue
+        if (a === '--recovery-file') {
+          i++ // 跳过文件路径值
+          continue
+        }
+        msgParts.push(a)
+      }
+      const message = msgParts.join(' ').trim()
+      if (!message) throw new Error(t('用法: shardnest sign <message> [--manual] [--recovery-file <path>]', "Usage: shardnest sign <message> [--manual] [--recovery-file <path>]"))
       const passphrase = await promptSecret(t('口令: ', "Passphrase: "))
-      await printRecoverySourceGuide()
-      const code = await promptSecret(t('恢复码（掩码输入）: ', "Recovery code (masked): "))
-      console.log(await signMessage(passphrase, code, args.join(' ')))
+      const code = await promptRecoveryCode(ropts)
+      console.log(await signMessage(passphrase, code, message))
       break
     }
     case 'wipe': {
@@ -183,9 +227,9 @@ async function main() {
         const c2 = await promptSecret(t('恢复码 2（掩码输入）: ', "Recovery code 2 (masked): "))
         result = await exportMnemonicFromCodes(c1, c2)
       } else {
+        const ropts = parseRecoveryOptions(args)
         const passphrase = await promptSecret(t('口令: ', "Passphrase: "))
-        await printRecoverySourceGuide()
-        const code = await promptSecret(t('恢复码（掩码输入）: ', "Recovery code (masked): "))
+        const code = await promptRecoveryCode(ropts)
         result = await exportMnemonic(passphrase, code)
       }
       console.log('\n✅ ' + t('助记词已导出', "Mnemonic exported"))
@@ -234,7 +278,7 @@ async function main() {
       break
     }
     default:
-      console.log(t('用法: shardnest [init|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export|wipe]', "Usage: shardnest [init|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export|wipe]"))
+      console.log(t('用法: shardnest [init|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export|wipe]\nunlock/sign 支持: --manual（强制手输恢复码） --recovery-file <path>（指定恢复码文件）', "Usage: shardnest [init|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export|wipe]\nunlock/sign support: --manual (force manual recovery code input) --recovery-file <path> (custom codes file)"))
   }
 }
 
