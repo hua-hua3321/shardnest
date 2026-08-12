@@ -57,8 +57,11 @@ export async function cleanupExpiredUnlockSessions(): Promise<number> {
   return removed
 }
 
-/** 会话类型：unlock=私钥解锁 / passphrase=创建或恢复口令（均单次 + TTL） */
+/** 会话类型：unlock=私钥解锁 / passphrase=口令会话（均单次 + TTL） */
 export type SessionType = 'unlock' | 'passphrase'
+
+/** P1-7: 口令会话的操作目的（create=建钱包 / restore=恢复钱包）——绑定操作防误用 */
+export type PassphrasePurpose = 'create' | 'restore'
 
 function sessionPrefix(type: SessionType): string {
   return type === 'unlock' ? 'unlock' : 'passphrase'
@@ -68,8 +71,9 @@ function sessionPrefix(type: SessionType): string {
  * 创建会话：敏感材料用 token 派生 KEK 加密落盘（0600），返回 token。
  * @param material 敏感字节（私钥或口令编码；调用方负责清零）
  * @param type 会话类型（决定文件前缀，隔离语义）
+ * @param purpose P1-7: 口令会话绑定的操作（写入会话文件，消费时校验）
  */
-export async function createUnlockSession(material: Uint8Array, type: SessionType = 'unlock'): Promise<string> {
+export async function createUnlockSession(material: Uint8Array, type: SessionType = 'unlock', purpose?: PassphrasePurpose): Promise<string> {
   const token = bytesToHex(randomBytes(32))
   const kek = sha256(new TextEncoder().encode(token))
   const nonce = randomBytes(12)
@@ -77,26 +81,31 @@ export async function createUnlockSession(material: Uint8Array, type: SessionTyp
   const ct = cipher.encrypt(material)
   const dir = getUnlockDir()
   await fs.mkdir(dir, { recursive: true })
+  await fs.chmod(dir, 0o700).catch(() => {}) // 中风险: 会话目录收紧 0700（默认 umask 可能留 0755）
   const file = path.join(dir, `${sessionPrefix(type)}-${token.slice(0, 16)}.bin`) // 8 字节熵前缀，防本地枚举
   await fs.writeFile(
     file,
-    JSON.stringify({ v: 1, nonce: Buffer.from(nonce).toString('base64'), ct: Buffer.from(ct).toString('base64') }),
+    JSON.stringify({ v: 2, purpose: purpose ?? null, nonce: Buffer.from(nonce).toString('base64'), ct: Buffer.from(ct).toString('base64') }),
     { mode: 0o600 },
   )
   return token
 }
 
-/** 创建口令会话（口令编码为 UTF-8 字节；MCP 侧消费后必须清零） */
-export function createPassphraseSession(passphrase: string): Promise<string> {
+/** 创建口令会话（口令编码为 UTF-8 字节；MCP 侧消费后必须清零）
+ * P1-7: purpose 绑定操作——create 令牌不能用于 restore，反之亦然 */
+export function createPassphraseSession(passphrase: string, purpose: PassphrasePurpose = 'create'): Promise<string> {
   const bytes = new TextEncoder().encode(passphrase)
-  return createUnlockSession(bytes, 'passphrase')
+  return createUnlockSession(bytes, 'passphrase', purpose)
 }
 
 /**
  * 消费解锁会话：验证 TTL → 解密私钥 → 删除文件（单次使用）。
+ * @param token 会话令牌
+ * @param type 会话类型（决定文件前缀）
+ * @param purpose P1-7: 期望的操作目的——会话文件中的 purpose 不匹配则拒绝
  * @returns 私钥（调用方签名后必须 wipe/清零）
  */
-export async function consumeUnlockSession(token: string, type: SessionType = 'unlock'): Promise<Uint8Array> {
+export async function consumeUnlockSession(token: string, type: SessionType = 'unlock', purpose?: PassphrasePurpose): Promise<Uint8Array> {
   if (!/^[0-9a-f]{64}$/.test(token)) throw new Error('解锁令牌格式无效')
   const dir = getUnlockDir()
   const file = path.join(dir, `${sessionPrefix(type)}-${token.slice(0, 16)}.bin`)
@@ -113,7 +122,11 @@ export async function consumeUnlockSession(token: string, type: SessionType = 'u
     if (Date.now() - stat.mtimeMs > UNLOCK_TTL_MS) {
       throw new Error('解锁会话已过期，请重新 unlock')
     }
-    const data = JSON.parse(await fs.readFile(consuming, 'utf8')) as { nonce: string; ct: string }
+    const data = JSON.parse(await fs.readFile(consuming, 'utf8')) as { v?: number; purpose?: PassphrasePurpose | null; nonce: string; ct: string }
+    // P1-7: 操作绑定校验——令牌用途与本次操作不一致即拒绝（防 create 令牌用于 restore 等）
+    if (purpose && data.purpose !== undefined && data.purpose !== null && data.purpose !== purpose) {
+      throw new Error(`口令令牌用途不匹配（令牌为 ${data.purpose}，本次操作为 ${purpose}）`)
+    }
     const kek = sha256(new TextEncoder().encode(token))
     const nonce = Uint8Array.from(Buffer.from(data.nonce, 'base64'))
     const ct = Uint8Array.from(Buffer.from(data.ct, 'base64'))
@@ -123,9 +136,10 @@ export async function consumeUnlockSession(token: string, type: SessionType = 'u
   }
 }
 
-/** 消费口令会话 → 返回口令明文（用后请立即脱离作用域） */
-export async function consumePassphraseSession(token: string): Promise<string> {
-  const bytes = await consumeUnlockSession(token, 'passphrase')
+/** 消费口令会话 → 返回口令明文（用后请立即脱离作用域）
+ * P1-7: purpose 必须与创建时一致 */
+export async function consumePassphraseSession(token: string, purpose?: PassphrasePurpose): Promise<string> {
+  const bytes = await consumeUnlockSession(token, 'passphrase', purpose)
   const passphrase = new TextDecoder().decode(bytes)
   bytes.fill(0)
   return passphrase

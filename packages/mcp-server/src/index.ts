@@ -14,7 +14,7 @@ import * as path from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { verifySignedRequest, type SignedRequest } from '@wallet-service/protocol'
+import { verifySignedRequest, walletSignMessage, type SignedRequest } from '@wallet-service/protocol'
 import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile, restoreFromMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getHomeDir, type WipeScope } from '@wallet-service/cli'
 import {defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession, consumePassphraseSession, cleanupExpiredUnlockSessions} from '@wallet-service/signer'
 
@@ -76,7 +76,8 @@ export function createShardnestServer(
         }
       }
       // 口令经本地口令令牌消费（CLI passphrase-token 生成；口令明文不进 LLM）
-      let passphrase = await consumePassphraseSession(passphrase_token)
+      // P1-7: 口令令牌绑定操作——create 令牌只能用于建钱包
+      let passphrase = await consumePassphraseSession(passphrase_token, 'create')
       let result: Awaited<ReturnType<typeof initWallet>>
       try {
         result = await initWallet(passphrase, email, generate_mnemonic === true, false) // W9: 已有钱包时拒绝（防静默覆盖）
@@ -253,10 +254,11 @@ export function createShardnestServer(
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'UNLOCK_INVALID', message: (err as Error).message }) }] }
       }
       try {
-        // 签名内容 = 平台背书的意图（intent_hash 由平台生成，本层不构造）
+        // P1-6: 签名内容 = 域分离 + 完整请求上下文绑定（wallet_address/nonce/expires_at/action/intent_hash），
+        // 与 verify-sdk 平台侧验证共用 walletSignMessage（protocol 包统一构造）
         const vault = new WalletVault()
         vault.unlockPrivateKey(privateKey)
-        const sig = vault.signMessage(new TextEncoder().encode(`${req.action}:${req.intent_hash}`))
+        const sig = vault.signMessage(walletSignMessage(req))
         const address = vault.getAddress()
         vault.wipe()
         return { content: [{ type: 'text' as const, text: JSON.stringify({ address, signature: Buffer.from(sig).toString('hex') }) }] }
@@ -278,7 +280,8 @@ export function createShardnestServer(
     },
     async ({ recovery_file_path, mnemonic_file_path, passphrase_token, expected_address, email }) => {
       try {
-        const passphrase = await consumePassphraseSession(passphrase_token)
+        // P1-7: 口令令牌绑定操作——restore 令牌只能用于恢复
+        const passphrase = await consumePassphraseSession(passphrase_token, 'restore')
         // 二选一：助记词文件（单份完整恢复）或恢复码文件（2-of-3 恢复）
         let result: Awaited<ReturnType<typeof restoreWallet>>
         if (mnemonic_file_path) {

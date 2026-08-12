@@ -86,6 +86,9 @@ export interface Share {
   index: number
   /** 分片字节（长度 = 秘密长度） */
   bytes: Uint8Array
+  /** 分片批次 ID（P1-2：同批分片共享；恢复码 sn2 携带。仅恢复码解码后存在，
+   * 分片算法本身不依赖此字段） */
+  setId?: string
 }
 
 export interface SplitOptions {
@@ -113,6 +116,8 @@ function defaultRng(): () => number {
 export function splitSecret(secret: Uint8Array, options: SplitOptions): Share[] {
   const { shares, threshold, rng = defaultRng() } = options
   if (shares < 2) throw new Error('shares must be >= 2')
+  // 中风险: shares 上限 255——GF(256) x 坐标域为 [1,255]，超出产生非法 index
+  if (shares > 255) throw new Error('shares must be <= 255 (GF(256) x-coordinate domain)')
   if (threshold < 2 || threshold > shares) {
     throw new Error('threshold must be in [2, shares]')
   }
@@ -146,6 +151,10 @@ export function combineShares(parts: Share[]): Uint8Array {
   const len = parts[0].bytes.length
   for (const p of parts) {
     if (p.bytes.length !== len) throw new Error('share length mismatch')
+    // 中风险: index 必须落在 GF(256) x 坐标域 [1,255]（非法 index 破坏插值语义）
+    if (!Number.isInteger(p.index) || p.index < 1 || p.index > 255) {
+      throw new Error('share index out of range [1,255]')
+    }
   }
   // 校验 x 坐标唯一
   const xs = parts.map((p) => p.index)

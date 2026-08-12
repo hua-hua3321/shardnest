@@ -3,6 +3,7 @@ export {
   verifySignedRequest,
   canonicalBytes,
   personalMessageHash,
+  walletSignMessage,
   type SignedRequest,
   type SignedRequestAction,
   type SignedRequestError,

@@ -18,6 +18,14 @@ export const SCRYPT_OPTS = { N: 2 ** 17, r: 8, p: 1, dkLen: 32 } as const // O2:
 /** v1 历史参数（C1：无 kdf 字段的旧钱包仅可能以 2^16 加密——回退必须用它而非新默认） */
 export const LEGACY_SCRYPT_OPTS_V1 = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 } as const
 
+/** scrypt 参数上限（中风险: 防篡改 device-share.json 的 KDF 元数据导致内存/CPU DoS） */
+export const SCRYPT_PARAM_CAPS = {
+  N_MAX: 2 ** 20, // 1 GiB——超限即拒绝（合法值远小于此）
+  R_MAX: 64,
+  P_MAX: 32,
+  DK_LEN_MAX: 64,
+} as const
+
 /** 持久化到密文的 KDF 元数据（RFC 8018 / age / 1Password 同款实践） */
 export interface KdfParams {
   alg: 'scrypt'
@@ -27,8 +35,19 @@ export interface KdfParams {
   dkLen: number
 }
 
+/** 构造 KDF 参数（含上限校验：非法/超限参数抛错，防资源耗尽） */
 export function kdfParamsOf(opts?: Partial<KdfParams>): KdfParams {
-  return { alg: 'scrypt', N: opts?.N ?? SCRYPT_OPTS.N, r: opts?.r ?? SCRYPT_OPTS.r, p: opts?.p ?? SCRYPT_OPTS.p, dkLen: opts?.dkLen ?? SCRYPT_OPTS.dkLen }
+  const N = opts?.N ?? SCRYPT_OPTS.N
+  const r = opts?.r ?? SCRYPT_OPTS.r
+  const p = opts?.p ?? SCRYPT_OPTS.p
+  const dkLen = opts?.dkLen ?? SCRYPT_OPTS.dkLen
+  const cap = SCRYPT_PARAM_CAPS
+  if (opts?.alg !== undefined && opts.alg !== 'scrypt') throw new Error('不支持的 KDF 算法')
+  if (!Number.isInteger(N) || N < 2 ** 12 || N > cap.N_MAX || (N & (N - 1)) !== 0) throw new Error('非法 scrypt N 参数（须为 [4096, 2^20] 的 2 的幂）')
+  if (!Number.isInteger(r) || r < 1 || r > cap.R_MAX) throw new Error('非法 scrypt r 参数')
+  if (!Number.isInteger(p) || p < 1 || p > cap.P_MAX) throw new Error('非法 scrypt p 参数')
+  if (!Number.isInteger(dkLen) || dkLen < 16 || dkLen > cap.DK_LEN_MAX) throw new Error('非法 scrypt dkLen 参数')
+  return { alg: 'scrypt', N, r, p, dkLen }
 }
 
 export interface KeyPair {
@@ -102,5 +121,9 @@ export function generateKeyPair(): KeyPair {
 /** 派生 KEK：参数可注入（O1——解密时使用密文中持久化的 KDF 参数，而非当前常量） */
 export async function deriveKEK(passphrase: string, salt: Uint8Array, opts?: Partial<KdfParams>): Promise<Uint8Array> {
   const password = new TextEncoder().encode(passphrase)
-  return scryptAsync(password, salt, kdfParamsOf(opts))
+  try {
+    return await scryptAsync(password, salt, kdfParamsOf(opts))
+  } finally {
+    password.fill(0) // 中风险: 口令字节用后清零（不变式 5 精神）
+  }
 }

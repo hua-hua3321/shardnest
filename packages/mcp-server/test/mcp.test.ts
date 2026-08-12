@@ -5,7 +5,7 @@ import { getHomeDir } from '@wallet-service/cli'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { createShardnestServer } from '../src/index'
-import { issueSignedRequest } from '@wallet-service/protocol'
+import { issueSignedRequest, walletSignMessage } from '@wallet-service/protocol'
 import { generatePrivateKey, privateKeyToAddress } from '@wallet-service/core'
 import { recoverSigner } from '@wallet-service/verify-sdk'
 import { createUnlockToken } from '@wallet-service/cli'
@@ -13,9 +13,20 @@ import {createPassphraseSession, defaultApproval} from '@wallet-service/signer'
 
 const TEST_HOME = path.join(process.cwd(), '.test-shardnest-mcp')
 
-beforeEach(async () => {
+// P0-1：模块加载阶段固定 SHARDNEST_HOME（beforeEach 内删 TEST_HOME 常量前，
+// 确保 getHomeDir()/getUnlockDir() 不会落到真实 ~/.shardnest）
+process.env.SHARDNEST_HOME = TEST_HOME
+
+/** P0-1 路径守卫：只允许删除明确的测试目录 */
+async function rmTestHome(): Promise<void> {
+  if (!TEST_HOME.includes('.test-shardnest-')) {
+    throw new Error(`拒绝删除非测试目录: ${TEST_HOME}`)
+  }
   await fs.rm(TEST_HOME, { recursive: true, force: true })
-  process.env.SHARDNEST_HOME = TEST_HOME
+}
+
+beforeEach(async () => {
+  await rmTestHome()
 })
 
 const platformPriv = generatePrivateKey()
@@ -28,7 +39,7 @@ async function createWallet(client: Client, passphrase: string, email?: string) 
   const res = await client.callTool({ name: 'wallet_create', arguments: { passphrase_token: token, email } })
   const data = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
   const fileContent = await fs.readFile(path.join(getHomeDir(), 'recovery-codes.txt'), 'utf8')
-  const recoveryCodes = fileContent.split('\n').filter((l) => l.startsWith('sn1-'))
+  const recoveryCodes = fileContent.split('\n').filter((l) => /^(sn1|sn2)-/.test(l.trim()))
   return { address: data.address, recoveryCodes, data }
 }
 
@@ -172,7 +183,7 @@ describe('shardnest MCP 薄壳', () => {
     const res = await client.callTool({
       name: 'wallet_restore',
       arguments: {
-        passphrase_token: await createPassphraseSession(PASSPHRASE),
+        passphrase_token: await createPassphraseSession(PASSPHRASE, 'restore'),
         expected_address: created.address,
         mnemonic_file_path: '/etc/passwd', // 钱包目录外路径
       },
@@ -198,7 +209,7 @@ describe('shardnest MCP 薄壳', () => {
     const res = await client.callTool({
       name: 'wallet_restore',
       arguments: {
-        passphrase_token: await createPassphraseSession(PASSPHRASE),
+        passphrase_token: await createPassphraseSession(PASSPHRASE, 'restore'),
         expected_address: created.address,
       },
     })
@@ -210,8 +221,34 @@ describe('shardnest MCP 薄壳', () => {
     expect(out.note).toBeTruthy()
     // 3. 新恢复码文件可读取（2 片）
     const fileCodes = (await fs.readFile(path.join(getHomeDir(), 'recovery-codes.txt'), 'utf8'))
-      .split('\n').filter((l) => l.startsWith('sn1-'))
+      .split('\n').filter((l) => /^(sn1|sn2)-/.test(l.trim()))
     expect(fileCodes.length).toBe(2)
+  })
+
+  it('P1-7：口令令牌绑定操作——create 令牌用于 wallet_restore → 拒绝', async () => {
+    const client = await connect()
+    const created = await createWallet(client, PASSPHRASE)
+    // create 令牌（默认 purpose=create）用于 restore → 用途不匹配
+    const res = await client.callTool({
+      name: 'wallet_restore',
+      arguments: {
+        passphrase_token: await createPassphraseSession(PASSPHRASE, 'create'),
+        expected_address: created.address,
+      },
+    })
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
+    expect(out.error).toBe('RESTORE_FAILED')
+    expect(out.message).toMatch(/用途不匹配/)
+    // restore 令牌用于 restore → 成功
+    const okRes = await client.callTool({
+      name: 'wallet_restore',
+      arguments: {
+        passphrase_token: await createPassphraseSession(PASSPHRASE, 'restore'),
+        expected_address: created.address,
+      },
+    })
+    const ok = JSON.parse(((okRes.content as unknown[])[0] as { text: string }).text)
+    expect(ok.address).toBe(created.address)
   })
 
   it('wallet_restore 期望地址不匹配 → RESTORE_FAILED（防输错恢复码）', async () => {
@@ -220,7 +257,7 @@ describe('shardnest MCP 薄壳', () => {
     const res = await client.callTool({
       name: 'wallet_restore',
       arguments: {
-        passphrase_token: await createPassphraseSession(PASSPHRASE),
+        passphrase_token: await createPassphraseSession(PASSPHRASE, 'restore'),
         expected_address: '0x0000000000000000000000000000000000000000',
       },
     })
@@ -260,10 +297,13 @@ describe('shardnest MCP 薄壳', () => {
     })
     const out = JSON.parse(((signRes.content as unknown[])[0] as { text: string }).text)
     expect(out.address).toBe(created.address)
-    // 5. 验签还原同一地址（平台侧可验证）
+    // 5. 验签还原同一地址（平台侧可验证；P1-6: 用 walletSignMessage 重建签名消息）
     const sig = Uint8Array.from(Buffer.from(out.signature, 'hex'))
-    const recovered = recoverSigner(`bind_wallet:${req.intent_hash}`, sig)
+    const recovered = recoverSigner(walletSignMessage(req), sig)
     expect(recovered.toLowerCase()).toBe(created.address.toLowerCase())
+    // P1-6: 签名绑定 nonce——改用不同 nonce 验签必然还原不同地址（防跨请求复用）
+    const otherNonce = recoverSigner(walletSignMessage({ ...req, nonce: 'other-nonce-1234567890' }), sig)
+    expect(otherNonce.toLowerCase()).not.toBe(created.address.toLowerCase())
   })
 
   it('wallet_address 与本地不一致 → WALLET_ADDRESS_MISMATCH 拒绝（纵深防御）', async () => {

@@ -27,9 +27,21 @@ import { keccak_256 } from '@noble/hashes/sha3'
 
 const TEST_HOME = path.join(process.cwd(), '.test-shardnest-home')
 
+// P0-1 修复：模块加载阶段立即固定 SHARDNEST_HOME（在任何 beforeEach/getHomeDir()
+// 调用之前）——此前 beforeEach 先 rm(getHomeDir()) 后设 env，未预设 env 时
+// 会删除真实 ~/.shardnest（审查中已多次触发该路径，务必不再发生）
+process.env.SHARDNEST_HOME = TEST_HOME
+
+/** P0-1 路径守卫：只允许删除明确的测试目录，杜绝误删真实钱包 */
+async function rmTestHome(): Promise<void> {
+  if (!TEST_HOME.includes('.test-shardnest-')) {
+    throw new Error(`拒绝删除非测试目录: ${TEST_HOME}`)
+  }
+  await fs.rm(TEST_HOME, { recursive: true, force: true })
+}
+
 beforeEach(async () => {
-  await fs.rm(getHomeDir(), { recursive: true, force: true })
-  process.env.SHARDNEST_HOME = TEST_HOME
+  await rmTestHome()
 })
 
 const PASSPHRASE = 'test-passphrase-123!'
@@ -181,12 +193,42 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(restored.address).toBe(plain.address)
   })
 
-  it('导出助记词：错误恢复码 → 地址不一致拒绝', async () => {
+  it('导出助记词：混用两个钱包的恢复码 → 批次校验拒绝（P1-2 优先于地址校验拦截）', async () => {
     const a = await initWallet(PASSPHRASE)
     const b = await initWallet(PASSPHRASE, undefined, false, true)
+    // sn2 批次不同 → 批次不一致拒绝（比地址不一致更早、更明确）
     await expect(
       exportMnemonicFromCodes(a.recoveryCodes[0], b.recoveryCodes[1]),
-    ).rejects.toThrow(/不一致/)
+    ).rejects.toThrow(/批次/)
+  })
+
+  it('P1-1：signMessage 用错钱包恢复码 → 地址交叉校验拒绝（不签出另一地址）', async () => {
+    const a = await initWallet(PASSPHRASE)
+    const b = await initWallet(PASSPHRASE, undefined, false, true)
+    // 设备片来自钱包 B（最新），恢复码来自钱包 A → 组合出 A 地址 → 与 metadata 不一致 → 拒绝
+    await expect(signMessage(PASSPHRASE, a.recoveryCodes[0], 'x')).rejects.toThrow(/不一致/)
+    // 正确恢复码仍可签名
+    const out = JSON.parse(await signMessage(PASSPHRASE, b.recoveryCodes[0], 'x'))
+    expect(out.address.toLowerCase()).toBe(b.address.toLowerCase())
+  })
+
+  it('P1-2：恢复码为 sn2 批次格式；混用两个钱包的恢复码 → 批次不一致拒绝', async () => {
+    const a = await initWallet(PASSPHRASE)
+    const b = await initWallet(PASSPHRASE, undefined, false, true)
+    // 新格式：sn2-<setid>-<index>-<hex>-<crc>，且同钱包两片 setId 一致
+    expect(a.recoveryCodes[0]).toMatch(/^sn2-[0-9a-f]{16}-/)
+    const sa1 = decodeRecoveryCode(a.recoveryCodes[0])
+    const sa2 = decodeRecoveryCode(a.recoveryCodes[1])
+    expect(sa1.setId).toBe(sa2.setId)
+    // 混用 a + b 的恢复码 → restore 批次拒绝
+    await expect(
+      restoreWallet('new-passphrase-456!', [a.recoveryCodes[0], b.recoveryCodes[1]] as [string, string], a.address),
+    ).rejects.toThrow(/批次|不同/)
+    // 导出助记词同样拒绝混用
+    await expect(exportMnemonicFromCodes(a.recoveryCodes[0], b.recoveryCodes[1])).rejects.toThrow(/批次|不同/)
+    // 同钱包两片 restore 正常
+    const r = await restoreWallet('new-passphrase-456!', [a.recoveryCodes[0], a.recoveryCodes[1]] as [string, string], a.address)
+    expect(r.address.toLowerCase()).toBe(a.address.toLowerCase())
   })
 
   it('wipe：错误确认短语拒绝 → 正确短语彻底删除 → 保存的恢复码可重建', async () => {
@@ -311,36 +353,51 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     await expect(createUnlockToken('wrong-passphrase-999!', r.recoveryCodes[0])).rejects.toThrow(/口令错误/)
   })
 
-  it('原子性回滚：device 写入失败时 recovery-codes.txt 与 mnemonic.txt 一并清理（C1）', async () => {
-    // 先正常建一个带助记词的钱包（制造 mnemonic.txt）
+  it('P0-2 事务式提交：staging 写失败时正式路径零接触（新建钱包无残留 / 覆盖旧钱包完整保留）', async () => {
+    // 先建一个带助记词的旧钱包（模拟 force 覆盖目标）
     const ok = await initWallet(PASSPHRASE, undefined, true)
     expect(ok.mnemonicFile).toBeTruthy()
     const mnemonicFile = ok.mnemonicFile as string
     const recoveryFile = ok.recoveryFile as string
     expect(await fs.exists(mnemonicFile)).toBe(true)
     expect(await fs.exists(recoveryFile)).toBe(true)
+    const oldMeta = await fs.readFile(path.join(getHomeDir(), 'metadata.json'), 'utf8')
 
-    // 模拟 device 写入失败：initWallet 再次运行时 device 写抛错
-    const realWriteFile = fs.writeFile.bind(fs)
+    // 模拟 staging 写失败：device 的 .tmp-* 文件 open 抛错（磁盘满）
+    const realOpen = fs.open.bind(fs)
     let fail = false
-    fs.writeFile = (async (file: string | URL, ...rest: unknown[]) => {
-      if (fail && String(file).endsWith('device-share.json')) {
+    fs.open = (async (file: string | URL, ...rest: unknown[]) => {
+      if (fail && String(file).includes('.tmp-') && String(file).includes('device-share')) {
         const err = new Error('disk full (simulated)') as NodeJS.ErrnoException
         throw err
       }
-      return (realWriteFile as (f: string | URL, ...r: unknown[]) => Promise<void>)(file, ...rest)
-    }) as typeof fs.writeFile
+      return (realOpen as (f: string | URL, ...r: unknown[]) => Promise<Awaited<ReturnType<typeof fs.open>>>)(file, ...rest)
+    }) as typeof fs.open
     try {
       fail = true
-      // 新口令 + 助记词——必须与旧钱包无关；这里仅验证回滚语义
+      // force 覆盖旧钱包时 device staging 失败 → 必须抛错
       await expect(initWallet('another-passphrase-456!', undefined, true, true)).rejects.toThrow('disk full')
     } finally {
       fail = false
-      fs.writeFile = realWriteFile
+      fs.open = realOpen
     }
-    // 回滚断言：recovery-codes.txt / mnemonic.txt 都被清理（不残留私钥材料）
-    expect(await fs.exists(recoveryFile)).toBe(false)
-    expect(await fs.exists(mnemonicFile)).toBe(false)
+    // P0-2 核心断言：失败后旧钱包完整保留（meta 未被替换、无 staging 残留）
+    expect(await fs.readFile(path.join(getHomeDir(), 'metadata.json'), 'utf8')).toBe(oldMeta)
+    expect(await fs.exists(recoveryFile)).toBe(true)
+    expect(await fs.exists(mnemonicFile)).toBe(true)
+    // 无 .tmp- 残留
+    const names = await fs.readdir(getHomeDir())
+    expect(names.some((n) => n.includes('.tmp-'))).toBe(false)
+  })
+
+  it('P1-3：损坏 metadata → initWallet 硬失败（不视为"无钱包"绕过防覆盖）', async () => {
+    await initWallet(PASSPHRASE)
+    // 篡改 metadata 为损坏 JSON → readOldAddress 重抛（非 ENOENT），initWallet 拒绝
+    await fs.writeFile(path.join(getHomeDir(), 'metadata.json'), '{ broken', { mode: 0o600 })
+    await expect(initWallet(PASSPHRASE)).rejects.toThrow()
+    // 缺 address 字段的合法 JSON 同样硬失败（读旧地址时校验字段）
+    await fs.writeFile(path.join(getHomeDir(), 'metadata.json'), JSON.stringify({ version: 1 }), { mode: 0o600 })
+    await expect(initWallet(PASSPHRASE)).rejects.toThrow(/损坏|metadata|address/)
   })
 
   it('getRecoveryFileStatus：1 片=emailed / 2 片=local-only / 无文件=missing', async () => {

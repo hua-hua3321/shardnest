@@ -2,11 +2,26 @@
 
 ## 架构分层（薄壳模型）
 
+> ⚠️ **当前实现状态**：下述「目标架构」（独立签名守护进程 + IPC + Keychain + OS 弹窗）
+> 是**路线图目标，尚未实现**（P0-3）。当前 MCP server 直接导入 CLI/signer，
+> 与密钥存储、重组、签名运行在**同一进程**（单进程架构）。
+>
+> **单进程架构下的安全边界**：
+> - ✅ **已实现**：凭证隔离——口令/恢复码/私钥/助记词**明文永不经 LLM 上下文**
+>   （`passphrase_token` / `recovery_file_path` / `recovery_codes_file` 三通道）
+> - ✅ **已实现**：口令加密设备分片（scrypt + AES-GCM）、2-of-3 门限、私钥用完内存清零
+> - ⚠️ **未实现（路线图）**：独立签名守护进程、本地 IPC、Keychain/Keystore、
+>   OS 弹窗——**MCP 进程被攻破 = 攻击者拥有与 CLI/signer 相同的文件系统权限
+>   和代码执行能力**，可读恢复码文件并重组钱包。在独立进程落地前，本项目的
+>   安全承诺是「凭证不进 LLM」，而非「MCP 被攻破拿不到密钥」。
+
+### 目标架构（路线图）
+
 ```
 MCP server（无密钥）→ 本地 IPC → 签名守护进程（唯一持钥者）
 ```
 
-- MCP 层被攻破：拿不到任何密钥
+- MCP 层被攻破：拿不到任何密钥（需独立进程落地）
 - 签名守护进程：Keychain/Keystore 保护 + OS 弹窗确认 + 私钥用完清零
 
 ## 密钥生命周期
@@ -24,7 +39,7 @@ MCP server（无密钥）→ 本地 IPC → 签名守护进程（唯一持钥者
 | 威胁 | 防护 | 残余风险 |
 |------|------|---------|
 | 服务方被黑 | 零密钥材料 | 无 |
-| 用户设备被控 | Keychain + 弹窗 | 设备完全沦陷无法防御（同硬件钱包） |
+| 用户设备被控 | 口令加密分片 + 2-of-3 门限 | 设备完全沦陷时明文恢复码文件可读（单进程架构下 MCP 同权限）；Keychain + OS 弹窗为路线图目标，未落地 |
 | prompt injection | 平台背书 + 用户确认 | 用户误点（高价值操作二次口令） |
 | 单分片泄露 | 2-of-3 门限 | 需 2 片同时泄露 |
 | 助记词文件泄露 | 仅本地 0600 文件；用户生成时已被告知单点风险 | **泄露即资金丢失（无门限保护）**；建议抄写离线保存后执行 `wipe saved` 删除本机明文 |
@@ -44,7 +59,7 @@ MCP server（无密钥）→ 本地 IPC → 签名守护进程（唯一持钥者
 | 🟠 P1 | 签名不校验 wallet_address | `signed_request_sign` 强制本地地址一致 → `WALLET_ADDRESS_MISMATCH` |
 | 🟡 P2 | 弱口令 / canonical 分隔符歧义 / 坏私钥静默 / 输入回显 | 口令 ≥12 位强制；canonicalString JSON 序列化；`WalletVault` 私钥范围校验（0<priv<n）；CLI 掩码输入 |
 
-> 全量 61/61 测试全绿（含新增：CRC 篡改、地址不匹配、无效令牌、口令强度）。
+> 全量 121/121 测试全绿（含：CRC 篡改、地址不匹配、无效令牌、口令强度、P0-2 事务落盘、P1-1 签名地址校验、P1-3 损坏 metadata、P1-5 畸形签名结构化错误）。
 
 ### 2026-08-10 深入审查修复（三视角并行：完整性 × 正确性 × 影响面）
 
@@ -57,7 +72,29 @@ MCP server（无密钥）→ 本地 IPC → 签名守护进程（唯一持钥者
 | 🟡 Suggestion | CLI 恢复码回显 / user_id·action 无校验 / 裸 0x19 / schema 0x 漂移 | 掩码输入；action 白名单+user_id 校验；`\x19` 转义；schema 去 0x |
 | 🔴 **口令令牌** | **`wallet_create`/`wallet_restore` 口令参数仍进 LLM（最后残余凭证）** | **`passphrase_token` 机制**：CLI `passphrase-token` 本地输入口令 → 生成口令会话令牌（`passphrase-*` 文件，5min/0600/单次）；MCP 工具只接收令牌，口令明文永不经 LLM——**口令+恢复码全部凭证闭环** |
 
-> 全量 72/72 测试全绿。
+> 全量 121/121 测试全绿。
+
+### 2026-08-11 外部审查修复（Codex 辩证核查）
+
+| 级别 | 问题 | 修复 |
+|------|------|------|
+| 🔴 P0 | CLI 测试 beforeEach 先删 `getHomeDir()` 后设 env——未预设 `SHARDNEST_HOME` 时删除真实 `~/.shardnest` | env 移至模块加载阶段 + 删除点路径守卫（含 `.test-shardnest-` 断言）；哨兵验证确认不再触碰真实目录 |
+| 🔴 P0 | 覆盖旧钱包失败时「回滚」删除旧钱包全部文件 | 事务式落盘：staging（O_EXCL）→ fsync → 原子 rename；失败时正式路径零接触 |
+| 🟠 P1 | `signMessage` 无地址交叉校验（错恢复码签出另一地址） | 与 `createUnlockToken` 对齐，派生后地址与 metadata 不一致即拒绝 |
+| 🟠 P1 | 损坏 metadata 被 `readOldAddress` 吞掉 → 绕过 init 防覆盖 | 仅 ENOENT 视为不存在；JSON 损坏/缺字段/权限错误一律硬失败 |
+| 🟠 P1 | 协议 Schema `platform_signature` pattern 128 与实现 130 hex 矛盾 | Schema 修正为 130 hex（65 字节 r‖s‖v） |
+| 🟠 P1 | 验签对畸形输入抛库异常（非结构化错误） | `platform_signature` 严格 130 hex 预校验 + `recoverSigner` try/catch + expectedPlatformAddress 格式校验 |
+| 🟡 中风险 | KDF 参数无上限（篡改 N/r/p 内存 DoS）| `kdfParamsOf` 参数上限（N≤2^20 且 2 的幂）|
+| 🟡 中风险 | 口令/KEK 字节未清零、shamir shares 无 255 上限、0600 不收紧已有文件 | `deriveKEK` 口令清零、`encryptShare`/`decryptShare` KEK 清零、shares≤255 + index∈[1,255] 校验、rename 后 chmod + 目录 0700 |
+
+### 2026-08-12 剩余问题修复（P0-3 / P1-2 / P1-6 / P1-7）
+
+| 级别 | 问题 | 修复 |
+|------|------|------|
+| 🔴 P0-3 | 文档宣称进程隔离/IPC/Keychain 已实现（实际单进程）| 文档区分「已实现/路线图」；明确当前承诺是「凭证不进 LLM」而非「MCP 被攻破无密钥」 |
+| 🟠 P1-2 | 恢复码无钱包/批次绑定——混用两套恢复码静默创建第三方钱包 | `sn2` 格式加随机 `share_set_id`，同批分片必须一致 |
+| 🟠 P1-6 | 钱包签名仅 `action:intent_hash`，可脱离请求传播 | 签名内容绑定 `wallet_address` + `nonce`（域分离）|
+| 🟠 P1-7 | 口令令牌不区分 create/restore 操作 | 令牌绑定操作类型（create/restore 前缀隔离）|
 
 ## 已知边界（诚实披露）
 

@@ -78,6 +78,20 @@ export function personalMessageHash(message: Uint8Array): Uint8Array {
   return keccak_256(payload)
 }
 
+/**
+ * P1-6: 钱包侧签名消息（域分离 + 完整请求上下文绑定）。
+ * 格式：`shardnest:signed_request:v1:<wallet_address>:<action>:<intent_hash>:<nonce>:<expires_at>`
+ * - 绑定 wallet_address / nonce / expires_at / action / intent_hash——签名无法脱离
+ *   原始请求单独传播（防跨请求复用）
+ * - 域前缀 `shardnest:signed_request:v1:` 防与其他签名类型混淆（域分离）
+ * - MCP 签名端与平台验签端必须调用同一函数，杜绝手工拼串漂移
+ */
+export function walletSignMessage(req: Pick<SignedRequest, 'action' | 'intent_hash' | 'wallet_address' | 'nonce' | 'expires_at'>): Uint8Array {
+  return new TextEncoder().encode(
+    `shardnest:signed_request:v1:${req.wallet_address.toLowerCase()}:${req.action}:${req.intent_hash}:${req.nonce}:${req.expires_at}`,
+  )
+}
+
 export interface IssueOptions {
   action: SignedRequestAction
   intentHash: string
@@ -153,11 +167,25 @@ export function verifySignedRequest(
   if (typeof r.expires_at !== 'number' || !Number.isInteger(r.expires_at) || r.expires_at * 1000 <= nowMs) {
     return { ok: false, error: 'EXPIRED' }
   }
+  // P1-5: platform_signature 严格预校验（65 字节 r||s||v = 130 hex）——
+  // 畸形输入（undefined/对象/非 hex/错误长度）直接结构化拒绝，不抛库异常
+  if (typeof r.platform_signature !== 'string' || !/^[0-9a-fA-F]{130}$/.test(r.platform_signature)) {
+    return { ok: false, error: 'BAD_SIGNATURE' }
+  }
   const sig = Uint8Array.from(Buffer.from(r.platform_signature, 'hex'))
   if (sig.length !== 65) return { ok: false, error: 'BAD_SIGNATURE' }
+  if (typeof expectedPlatformAddress !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(expectedPlatformAddress)) {
+    return { ok: false, error: 'INVALID_FORMAT' }
+  }
   const { intent_hash, display, user_id, wallet_address } = r
   const base = { v: 1 as const, action: r.action as SignedRequestAction, intent_hash, display, user_id, wallet_address, nonce: r.nonce, expires_at: r.expires_at }
-  const recovered = recoverSigner(canonicalBytes(base), sig)
+  let recovered: `0x${string}`
+  try {
+    recovered = recoverSigner(canonicalBytes(base), sig)
+  } catch {
+    // P1-5: 不可信签名导致公钥恢复/验签异常 → 结构化 BAD_SIGNATURE（不抛到调用方）
+    return { ok: false, error: 'BAD_SIGNATURE' }
+  }
   if (recovered.toLowerCase() !== expectedPlatformAddress.toLowerCase()) {
     return { ok: false, error: 'BAD_SIGNATURE' }
   }

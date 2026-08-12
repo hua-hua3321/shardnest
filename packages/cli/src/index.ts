@@ -72,8 +72,14 @@ async function main() {
       // 本地输入口令 → 生成短期单次口令令牌（MCP wallet_create/restore 用，口令不进 LLM）
       const passphrase = await promptSecret(t('口令（>=12 位）: ', "Passphrase (>=12 chars): "))
       if (passphrase.length < 12) throw new Error(t('口令至少 12 位', "Passphrase must be at least 12 chars"))
-      const token = await createPassphraseSession(passphrase)
-      console.log(t('\n🔑 口令令牌（5 分钟有效，单次使用）：请粘贴到 MCP 工具调用中，勿转发给他人/其他平台', '\n🔑 Passphrase token (valid 5 min, single-use): paste into the MCP tool call; do not forward to others/other platforms'))
+      // P1-7: 令牌绑定操作用途——create 令牌只能用于 wallet_create，restore 令牌只能用于 wallet_restore
+      console.log(t('令牌用途：', 'Token purpose:'))
+      console.log(t('  [c] 创建钱包（wallet_create）', '  [c] Create wallet (wallet_create)'))
+      console.log(t('  [r] 恢复钱包（wallet_restore）', '  [r] Restore wallet (wallet_restore)'))
+      const purposeChoice = (await prompt(t('选择 [c/r]: ', 'Choose [c/r]: '))).trim().toLowerCase()
+      const purpose = purposeChoice === 'r' ? 'restore' : 'create'
+      const token = await createPassphraseSession(passphrase, purpose)
+      console.log(t(`\n🔑 口令令牌（${purpose}，5 分钟有效，单次使用）：请粘贴到对应 MCP 工具调用中，勿转发给他人/其他平台`, `\n🔑 Passphrase token (${purpose}, valid 5 min, single-use): paste into the matching MCP tool call; do not forward to others/other platforms`))
       console.log(token)
       break
     }

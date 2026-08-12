@@ -121,3 +121,35 @@ describe('signed_request v1', () => {
     expect(displayLen).toBe(new TextEncoder().encode('任务说明·中文').length)
   })
 })
+
+describe('P1-5：验签对畸形输入返回结构化错误（不抛库异常）', () => {
+  const valid = issueSignedRequest(makeOptions(), platformPriv)
+
+  it('platform_signature undefined → BAD_SIGNATURE（不抛 TypeError）', () => {
+    const bad = { ...valid, platform_signature: undefined }
+    expect(() => verifySignedRequest(bad, platformAddr)).not.toThrow()
+    expect(verifySignedRequest(bad, platformAddr).error).toBe('BAD_SIGNATURE')
+  })
+
+  it('platform_signature 非字符串（对象）→ BAD_SIGNATURE', () => {
+    const bad = { ...valid, platform_signature: {} }
+    expect(verifySignedRequest(bad, platformAddr).error).toBe('BAD_SIGNATURE')
+  })
+
+  it('platform_signature 非 hex / 长度非 130 → BAD_SIGNATURE', () => {
+    const bad1 = { ...valid, platform_signature: 'zz'.repeat(65) }
+    expect(verifySignedRequest(bad1, platformAddr).error).toBe('BAD_SIGNATURE')
+    const bad2 = { ...valid, platform_signature: valid.platform_signature.slice(0, 128) } // 128 hex（旧矛盾长度）
+    expect(verifySignedRequest(bad2, platformAddr).error).toBe('BAD_SIGNATURE')
+  })
+
+  it('130 hex 但全零签名（65 字节全 0）→ BAD_SIGNATURE（recoverSigner 异常被捕获）', () => {
+    const bad = { ...valid, platform_signature: '00'.repeat(65) }
+    expect(() => verifySignedRequest(bad, platformAddr)).not.toThrow()
+    expect(verifySignedRequest(bad, platformAddr).error).toBe('BAD_SIGNATURE')
+  })
+
+  it('expectedPlatformAddress 格式非法 → INVALID_FORMAT（不抛）', () => {
+    expect(verifySignedRequest(valid, 'not-an-address').error).toBe('INVALID_FORMAT')
+  })
+})

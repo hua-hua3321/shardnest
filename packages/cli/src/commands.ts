@@ -26,6 +26,7 @@ import { gcm } from '@noble/ciphers/aes'
 import { sendBackupShare } from './mailer'
 import { createUnlockSession, getUnlockDir } from '@wallet-service/signer'
 import { randomBytes } from '@noble/hashes/utils'
+import { randomUUID } from 'node:crypto'
 import { entropyToMnemonic, mnemonicToEntropy, generateEntropy } from '@wallet-service/core'
 
 /** 钱包目录（动态读取 env，便于测试隔离） */
@@ -40,29 +41,78 @@ const deviceFile = () => path.join(getHomeDir(), 'device-share.json')
 const recoveryFile = () => path.join(getHomeDir(), 'recovery-codes.txt')
 const mnemonicFile = () => path.join(getHomeDir(), 'mnemonic.txt')
 
-/** 助记词落盘（0600；助记词=完整私钥，用户选择生成即接受单点保管） */
-export async function saveMnemonic(mnemonic: string): Promise<string> {
-  const file = mnemonicFile()
+/**
+ * 原子写文件（P0-2 基础）：staging（同目录 .tmp-<rand>，O_EXCL 防符号链接跟随）
+ * → fsync → rename 替换。失败时旧文件零接触（staging 清理后即无痕）。
+ * rename 后显式 chmod（中风险: 已有宽松权限文件被 rename 替换后仍保持旧权限）
+ * @returns 正式文件路径
+ */
+async function writeFileAtomic(file: string, content: string, mode: number): Promise<string> {
   await fs.mkdir(path.dirname(file), { recursive: true })
-  const content = [
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${randomUUID()}`)
+  const fh = await fs.open(tmp, 'wx', mode) // O_CREAT|O_EXCL
+  try {
+    await fh.writeFile(content)
+    await fh.sync() // 数据落盘后才 rename（崩溃一致性）
+  } finally {
+    await fh.close().catch(() => {})
+  }
+  await fs.rename(tmp, file)
+  await fs.chmod(file, mode).catch(() => {}) // 防已有文件保留宽松权限
+  return file
+}
+
+/**
+ * 多文件事务式提交（P0-2）：全部写入 staging + fsync 成功后才逐个 rename。
+ * - 任一 staging 写失败 → 清理全部 staging，正式路径零接触（旧钱包完好）
+ * - rename 阶段失败极罕见（同目录原子替换）；已切换文件为完整新内容，非半写状态
+ */
+async function commitAtomically(files: { file: string; content: string; mode: number }[]): Promise<void> {
+  const tmps: { tmp: string; final: string }[] = []
+  try {
+    for (const f of files) {
+      await fs.mkdir(path.dirname(f.file), { recursive: true })
+      // 中风险: 钱包目录收紧 0700（默认 umask 可能留 0755）
+      await fs.chmod(path.dirname(f.file), 0o700).catch(() => {})
+      const tmp = path.join(path.dirname(f.file), `.${path.basename(f.file)}.tmp-${randomUUID()}`)
+      const fh = await fs.open(tmp, 'wx', f.mode)
+      try {
+        await fh.writeFile(f.content)
+        await fh.sync()
+      } finally {
+        await fh.close().catch(() => {})
+      }
+      tmps.push({ tmp, final: f.file })
+    }
+    for (const t of tmps) {
+      await fs.rename(t.tmp, t.final)
+      await fs.chmod(t.final, files.find((f) => f.file === t.final)!.mode).catch(() => {}) // 防已有宽松权限
+    }
+  } catch (err) {
+    // 清理所有残留 staging（正式文件未被修改——事务未提交）
+    for (const t of tmps) await fs.rm(t.tmp, { force: true }).catch(() => {})
+    throw err
+  }
+}
+
+/** 助记词内容构造（与落盘分离，供事务式提交） */
+export function buildMnemonicContent(mnemonic: string): string {
+  return [
     '# shardnest 24 词助记词备份（完整私钥，单点！请勿拍照/截图/网络传输）',
     '# 单凭此 24 词即可恢复钱包；泄露即资金丢失（与分片恢复码不同，无门限保护）',
     '',
     mnemonic,
     '',
   ].join('\n') + '\n'
-  await fs.writeFile(file, content, { mode: 0o600 })
-  return file
 }
 
-/** 恢复码落盘（0600 明文，用户自持责任；与纸备份等价，供 MCP 场景免 LLM 交付）
- * 存储策略（方案 A+B）：
- * - 邮箱发送成功（1 片本地）→ 本地仅存 1 片，头部说明另一片在邮箱——本机整体失守无法动钱
- * - 未发邮箱（2 片本地）→ 显著警告：本地集中 2 片=私钥，整体泄露即失守，建议转移/配邮箱
- */
-export async function saveRecoveryCodes(codes: string[], emailed = false): Promise<string> {
-  const file = recoveryFile()
-  await fs.mkdir(path.dirname(file), { recursive: true })
+/** 助记词落盘（0600；助记词=完整私钥，用户选择生成即接受单点保管；原子替换） */
+export async function saveMnemonic(mnemonic: string): Promise<string> {
+  return writeFileAtomic(mnemonicFile(), buildMnemonicContent(mnemonic), 0o600)
+}
+
+/** 恢复码内容构造（与落盘分离，供事务式提交） */
+export function buildRecoveryCodesContent(codes: string[], emailed = false): string {
   const header = emailed
     ? [
         '# shardnest 恢复码（本地仅 1 片）',
@@ -75,9 +125,16 @@ export async function saveRecoveryCodes(codes: string[], emailed = false): Promi
         '# 强烈建议：转移 1 片离线保存（纸/密码管理器），或重新 init 配置邮箱备份',
         '# 单凭 1 片无法动用资金',
       ]
-  const content = [...header, '', ...codes.map((c) => c + '')].join('\n') + '\n'
-  await fs.writeFile(file, content, { mode: 0o600 })
-  return file
+  return [...header, '', ...codes.map((c) => c + '')].join('\n') + '\n'
+}
+
+/** 恢复码落盘（0600 明文，用户自持责任；与纸备份等价，供 MCP 场景免 LLM 交付）
+ * 存储策略（方案 A+B）：
+ * - 邮箱发送成功（1 片本地）→ 本地仅存 1 片，头部说明另一片在邮箱——本机整体失守无法动钱
+ * - 未发邮箱（2 片本地）→ 显著警告：本地集中 2 片=私钥，整体泄露即失守，建议转移/配邮箱
+ */
+export async function saveRecoveryCodes(codes: string[], emailed = false): Promise<string> {
+  return writeFileAtomic(recoveryFile(), buildRecoveryCodesContent(codes, emailed), 0o600)
 }
 
 export interface InitResult {
@@ -96,31 +153,59 @@ export interface InitResult {
 
 import { keccak_256 } from '@noble/hashes/sha3'
 
-/** 恢复码编码：sn1-<index>-<hex>-<crc>
- * crc = keccak(`${index}:${hex}`) 首字节——CRC 覆盖 index+hex，
- * 防手输/OCR 错误的同时杜绝「错误 index + 正确 hex」绕过（P1-B）
+/**
+ * 恢复码编码（P1-2 批次绑定）：
+ * - sn2-<setid>-<index>-<hex>-<crc>（新，带 8 字节随机批次 ID）
+ * - sn1-<index>-<hex>-<crc>（旧，无批次——decode 时 setId 为 undefined）
+ * CRC = keccak256 前 4 字节，覆盖 setid:index:hex——同批分片必须 setId 一致，
+ * 杜绝「混用两套不同钱包的恢复码静默恢复出第三方钱包」
+ * @param setId 批次 ID（init/restore 时生成一次，同批 3 片共享）；省略则编码 sn1
  */
-/** 编码恢复码（O3：CRC 32 位——keccak256 前 4 字节，漏检率 1/2^32；旧 8 位码 fail-safe） */
-export function encodeRecoveryCode(share: Share): string {
+export function encodeRecoveryCode(share: Share, setId?: string): string {
   const hex = Buffer.from(share.bytes).toString('hex')
-  const crc = Buffer.from(keccak_256(new TextEncoder().encode(`${share.index}:${hex}`)).slice(0, 4)).toString('hex')
-  return `sn1-${share.index}-${hex}-${crc}`
+  const idPart = setId ?? ''
+  const crc = Buffer.from(keccak_256(new TextEncoder().encode(`${idPart}${share.index}:${hex}`)).slice(0, 4)).toString('hex')
+  return setId ? `sn2-${setId}-${share.index}-${hex}-${crc}` : `sn1-${share.index}-${hex}-${crc}`
 }
 
 export function decodeRecoveryCode(code: string): Share {
   const parts = code.trim().split('-')
-  if (parts.length !== 4 || parts[0] !== 'sn1') throw new Error('无效恢复码格式')
-  const [, idx, hex, crc] = parts
-  const index = Number(idx)
-  // index 必须为 [1,255] 整数（GF(256) x 坐标域）
-  if (!Number.isInteger(index) || index < 1 || index > 255) throw new Error('恢复码 index 超出有效范围')
-  if (!/^[0-9a-f]{2,128}$/.test(hex) || hex.length % 2 !== 0) throw new Error('恢复码 hex 格式无效')
-  // O3: 32 位 CRC；W4 双宽兼容——旧 8 位码（批次前生成）仍放行（恢复码无法重新获取）
-  const k = keccak_256(new TextEncoder().encode(`${index}:${hex}`))
-  const crc32 = Buffer.from(k.slice(0, 4)).toString('hex')
-  const crc8 = k[0].toString(16).padStart(2, '0')
-  if (crc !== crc32 && crc !== crc8) throw new Error('恢复码校验失败（可能抄错/损坏），请核对后重试')
-  return { index, bytes: new Uint8Array(Buffer.from(hex, 'hex')) }
+  // sn2-<setid>-<index>-<hex>-<crc>（5 段）或 sn1-<index>-<hex>-<crc>（4 段）
+  if (parts.length === 5 && parts[0] === 'sn2') {
+    const [, setId, idx, hex, crc] = parts
+    if (!/^[0-9a-f]{16}$/.test(setId)) throw new Error('恢复码批次 ID 格式无效')
+    const index = Number(idx)
+    if (!Number.isInteger(index) || index < 1 || index > 255) throw new Error('恢复码 index 超出有效范围')
+    if (!/^[0-9a-f]{2,128}$/.test(hex) || hex.length % 2 !== 0) throw new Error('恢复码 hex 格式无效')
+    const expectCrc = Buffer.from(keccak_256(new TextEncoder().encode(`${setId}${index}:${hex}`)).slice(0, 4)).toString('hex')
+    if (crc !== expectCrc) throw new Error('恢复码校验失败（可能抄错/损坏），请核对后重试')
+    return { index, bytes: new Uint8Array(Buffer.from(hex, 'hex')), setId }
+  }
+  if (parts.length === 4 && parts[0] === 'sn1') {
+    const [, idx, hex, crc] = parts
+    const index = Number(idx)
+    // index 必须为 [1,255] 整数（GF(256) x 坐标域）
+    if (!Number.isInteger(index) || index < 1 || index > 255) throw new Error('恢复码 index 超出有效范围')
+    if (!/^[0-9a-f]{2,128}$/.test(hex) || hex.length % 2 !== 0) throw new Error('恢复码 hex 格式无效')
+    // O3: 32 位 CRC；W4 双宽兼容——旧 8 位码（批次前生成）仍放行（恢复码无法重新获取）
+    const k = keccak_256(new TextEncoder().encode(`${index}:${hex}`))
+    const crc32 = Buffer.from(k.slice(0, 4)).toString('hex')
+    const crc8 = k[0].toString(16).padStart(2, '0')
+    if (crc !== crc32 && crc !== crc8) throw new Error('恢复码校验失败（可能抄错/损坏），请核对后重试')
+    return { index, bytes: new Uint8Array(Buffer.from(hex, 'hex')) }
+  }
+  throw new Error('无效恢复码格式')
+}
+
+/**
+ * P1-2: 校验一组分片属于同一批次（均带 setId 且一致；sn1 旧码无 setId 则跳过——
+ * 无法校验，依赖地址交叉校验兜底）
+ */
+function assertSameShareSet(shares: Share[]): void {
+  const setIds = shares.map((s) => s.setId).filter((id): id is string => id !== undefined)
+  if (setIds.length > 0 && new Set(setIds).size > 1) {
+    throw new Error('恢复码来自不同批次（可能混用了两个钱包的恢复码），操作已中止')
+  }
 }
 
 /** 加密设备分片（O1：KDF 参数随密文持久化——未来 scrypt 升级不破坏旧钱包） */
@@ -128,16 +213,20 @@ async function encryptShare(share: Share, passphrase: string): Promise<{ data: s
   const salt = randomBytes(16)
   const kdf = kdfParamsOf() // 当前常量参数，持久化供解密
   const kek = await deriveKEK(passphrase, salt, kdf)
-  const nonce = randomBytes(12)
-  const cipher = gcm(kek, nonce)
-  const payload = new Uint8Array(1 + share.bytes.length)
-  payload[0] = share.index
-  payload.set(share.bytes, 1)
-  const ct = cipher.encrypt(payload)
-  return {
-    data: Buffer.from(nonce).toString('base64') + '.' + Buffer.from(ct).toString('base64'),
-    salt: Buffer.from(salt).toString('base64'),
-    kdf, // O1: KDF 参数随密文持久化
+  try {
+    const nonce = randomBytes(12)
+    const cipher = gcm(kek, nonce)
+    const payload = new Uint8Array(1 + share.bytes.length)
+    payload[0] = share.index
+    payload.set(share.bytes, 1)
+    const ct = cipher.encrypt(payload)
+    return {
+      data: Buffer.from(nonce).toString('base64') + '.' + Buffer.from(ct).toString('base64'),
+      salt: Buffer.from(salt).toString('base64'),
+      kdf, // O1: KDF 参数随密文持久化
+    }
+  } finally {
+    kek.fill(0) // 中风险: KEK 用后清零（不变式 5 精神）
   }
 }
 
@@ -147,18 +236,22 @@ async function encryptShare(share: Share, passphrase: string): Promise<{ data: s
 async function decryptShare(enc: { data: string; salt: string; kdf?: KdfParams }, passphrase: string): Promise<Share> {
   const salt = Uint8Array.from(Buffer.from(enc.salt, 'base64'))
   const kek = await deriveKEK(passphrase, salt, enc.kdf ?? LEGACY_SCRYPT_OPTS_V1)
-  const [nonceB64, ctB64] = enc.data.split('.')
-  const nonce = Uint8Array.from(Buffer.from(nonceB64, 'base64'))
-  const ct = Uint8Array.from(Buffer.from(ctB64, 'base64'))
-  const cipher = gcm(kek, nonce)
-  let payload: Uint8Array
   try {
-    payload = cipher.decrypt(ct)
-  } catch {
-    // I10: AES-GCM 认证失败 = 口令错误或分片损坏——给用户可操作的提示而非库原始错误
-    throw new Error('口令错误，或设备分片已损坏——请核对口令后重试')
+    const [nonceB64, ctB64] = enc.data.split('.')
+    const nonce = Uint8Array.from(Buffer.from(nonceB64, 'base64'))
+    const ct = Uint8Array.from(Buffer.from(ctB64, 'base64'))
+    const cipher = gcm(kek, nonce)
+    let payload: Uint8Array
+    try {
+      payload = cipher.decrypt(ct)
+    } catch {
+      // I10: AES-GCM 认证失败 = 口令错误或分片损坏——给用户可操作的提示而非库原始错误
+      throw new Error('口令错误，或设备分片已损坏——请核对口令后重试')
+    }
+    return { index: payload[0], bytes: payload.slice(1) }
+  } finally {
+    kek.fill(0) // 中风险: KEK 用后清零（不变式 5 精神）
   }
-  return { index: payload[0], bytes: payload.slice(1) }
 }
 
 /** 口令强度校验（≥12 位，防弱口令爆破设备分片） */
@@ -202,7 +295,9 @@ async function createWalletFromEntropy(
   const shares = splitSecret(entropy, { shares: 3, threshold: 2 })
   try {
     const enc = await encryptShare(shares[0], passphrase)
-    const recoveryCodes = [shares[1], shares[2]].map(encodeRecoveryCode)
+    // P1-2: 本批次恢复码共享同一随机 setId（8 字节）——混用跨钱包分片即被批次校验拒绝
+    const setId = Buffer.from(randomBytes(8)).toString('hex')
+    const recoveryCodes = [shares[1], shares[2]].map((s) => encodeRecoveryCode(s, setId))
 
     // 1. 可失败操作先行：邮箱校验 + 发送（失败抛错 → 不落盘）
     let backupStatus: 'sent' | 'skipped' | undefined
@@ -213,39 +308,32 @@ async function createWalletFromEntropy(
       backupStatus = await sendBackupShare(email, address, recoveryCodes[1])
     }
 
-    // 2. 可失败操作全部前置（恢复码/助记词落盘）
+    // 2. 可失败操作全部前置（邮箱/助记词内容构造，不落盘）
     //    存储策略 A+B：邮箱已送达（sent）→ 本地只存片②（片③在邮箱，三处分布）；
     //    skipped/无邮箱 → 本地存 2 片（显著警告，用户自担）
     const emailed = backupStatus === 'sent'
     const localCodes = emailed ? [recoveryCodes[0]] : recoveryCodes
-    const recoveryFileWritten = await saveRecoveryCodes(localCodes, emailed)
-    let mnemonicFileWritten: string | undefined
-    if (mnemonic) {
-      mnemonicFileWritten = await saveMnemonic(entropyToMnemonic(entropy)) // O4A: 熵→标准 24 词
-    }
 
-    // 3. 原子落盘 + 回滚（失败时清理全部已写文件——含明文恢复码/助记词=私钥材料）
-    try {
-      await fs.mkdir(getHomeDir(), { recursive: true })
-      await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
-      await fs.writeFile(deviceFile(), JSON.stringify({ version: 2, share: enc }, null, 2), { mode: 0o600 })
-    } catch (err) {
-      await fs.rm(metaFile(), { force: true })
-      await fs.rm(deviceFile(), { force: true })
-      // 失败回滚用普通删除而非 secureDelete：文件刚写入未持久化，且
-      // secureDelete 在 APFS/SSD（CoW）上同样无法保证物理抹除——普通删除足够
-      await fs.rm(recoveryFileWritten, { force: true }) // 明文恢复码（2 片=私钥）
-      if (mnemonicFileWritten) await fs.rm(mnemonicFileWritten, { force: true }) // 助记词=完整私钥
-      throw err
+    // 3. 事务式提交（P0-2）：meta/device/recovery/mnemonic 全部先写 staging +
+    //    fsync，全部成功后才逐个 rename。任一失败 → 清理 staging，正式路径
+    //    零接触——force 覆盖旧钱包时失败，旧钱包完整保留（不再删旧文件）
+    const files: { file: string; content: string; mode: number }[] = [
+      { file: metaFile(), content: JSON.stringify({ version: 1, address }, null, 2), mode: 0o600 },
+      { file: deviceFile(), content: JSON.stringify({ version: 2, share: enc }, null, 2), mode: 0o600 },
+      { file: recoveryFile(), content: buildRecoveryCodesContent(localCodes, emailed), mode: 0o600 },
+    ]
+    if (mnemonic) {
+      files.push({ file: mnemonicFile(), content: buildMnemonicContent(entropyToMnemonic(entropy)), mode: 0o600 })
     }
+    await commitAtomically(files)
 
     return {
       address,
       recoveryCodes,
       backupEmail: email,
       backupStatus,
-      recoveryFile: recoveryFileWritten,
-      mnemonicFile: mnemonicFileWritten,
+      recoveryFile: recoveryFile(),
+      mnemonicFile: mnemonic ? mnemonicFile() : undefined,
       note: mnemonic
         ? '助记词已生成（=完整私钥，单点）：请抄写并安全保管，勿拍照/截图/网络传输；建议抄写离线保存后执行 wipe 删除本机明文备份'
         : undefined,
@@ -302,12 +390,17 @@ export async function signMessage(passphrase: string, recoveryCode: string, mess
   const share1 = await decryptShare(enc.share, passphrase)
   const share2 = decodeRecoveryCode(recoveryCode)
   const { WalletVault } = await import('@wallet-service/signer')
-  const { derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+  const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
   const vault = new WalletVault()
   const entropy = combineShares([share1, share2]) // O4A: 重组根熵
   let privateKey: Uint8Array | null = null
   try {
     privateKey = derivePrivateKeyFromEntropy(entropy) // BIP-39/44 派生
+    // P1-1: 地址交叉校验——恢复码与设备片不匹配时拒绝（防签出另一地址的签名被平台拒）
+    const want = await readOldAddress()
+    if (want && privateKeyToAddress(privateKey).toLowerCase() !== want.toLowerCase()) {
+      throw new Error('组合出的地址与本地钱包不一致——恢复码可能输错，操作已中止')
+    }
     vault.unlockPrivateKey(privateKey) // O4A: 组合/派生已在命令层完成
     const sig = vault.signMessage(new TextEncoder().encode(message))
     const addr = vault.getAddress()
@@ -335,6 +428,7 @@ export async function restoreWallet(
 ): Promise<InitResult> {
   validatePassphrase(passphrase)
   const shares = recoveryCodes.map(decodeRecoveryCode)
+  assertSameShareSet(shares) // P1-2: 混用两个钱包的恢复码 → 批次不一致 → 拒绝
   const fresh = reshareShares(shares, { shares: 3, threshold: 2 })
   const enc = await encryptShare(fresh[0], passphrase)
   const entropy = combineShares([fresh[0], fresh[1]]) // O4A: 重组根熵
@@ -350,7 +444,9 @@ export async function restoreWallet(
     throw new Error(`恢复出的地址 (${address}) 与目标地址 (${want}) 不一致——恢复码可能输错，操作已中止`)
   }
 
-  const newCodes = [fresh[1], fresh[2]].map(encodeRecoveryCode)
+  // P1-2: 新恢复码使用新批次 ID（reshare 后旧批次作废，靠物理清理旧载体）
+  const newSetId = Buffer.from(randomBytes(8)).toString('hex')
+  const newCodes = [fresh[1], fresh[2]].map((s) => encodeRecoveryCode(s, newSetId))
 
   // 可失败操作前置：邮箱备份（新片③）+ 恢复码落盘
   let backupStatus: 'sent' | 'skipped' | undefined
@@ -365,18 +461,15 @@ export async function restoreWallet(
   // 存储策略 A+B（同 createWalletFromPrivateKey）
   const emailed = backupStatus === 'sent'
   const localCodes = emailed ? [newCodes[0]] : newCodes
-  const recoveryFileWritten = await saveRecoveryCodes(localCodes, emailed)
 
-  // 原子落盘 + 回滚（失败时清理全部已写文件——含明文恢复码=私钥材料）
+  // 事务式提交（P0-2）：meta/device/recovery 全部 staging + fsync 成功后统一
+  // rename。任一失败 → 清理 staging，正式路径零接触——恢复失败时旧钱包完整保留
   try {
-    await fs.mkdir(getHomeDir(), { recursive: true })
-    await fs.writeFile(metaFile(), JSON.stringify({ version: 1, address }, null, 2), { mode: 0o600 })
-    await fs.writeFile(deviceFile(), JSON.stringify({ version: 2, share: enc }, null, 2), { mode: 0o600 })
-  } catch (err) {
-    await fs.rm(metaFile(), { force: true })
-    await fs.rm(deviceFile(), { force: true })
-    await fs.rm(recoveryFileWritten, { force: true }) // 明文恢复码（2 片=私钥）
-    throw err
+    await commitAtomically([
+      { file: metaFile(), content: JSON.stringify({ version: 1, address }, null, 2), mode: 0o600 },
+      { file: deviceFile(), content: JSON.stringify({ version: 2, share: enc }, null, 2), mode: 0o600 },
+      { file: recoveryFile(), content: buildRecoveryCodesContent(localCodes, emailed), mode: 0o600 },
+    ])
   } finally {
     privateKey.fill(0)
     entropy.fill(0) // O4A: 根熵清零
@@ -386,7 +479,7 @@ export async function restoreWallet(
   return {
     address,
     recoveryCodes: newCodes,
-    recoveryFile: recoveryFileWritten,
+    recoveryFile: recoveryFile(),
     backupEmail: email,
     backupStatus,
     note: email
@@ -401,7 +494,8 @@ export async function restoreWallet(
 export async function readRecoveryCodesFromFile(filePath?: string): Promise<string[]> {
   const file = filePath ?? path.join(getHomeDir(), 'recovery-codes.txt')
   const content = await fs.readFile(file, 'utf8')
-  const codes = content.split('\n').filter((l) => l.trim().startsWith('sn1-')).map((l) => l.trim())
+  // P1-2: 同时识别 sn1/sn2 前缀（sn2 携带批次 ID）
+  const codes = content.split('\n').filter((l) => /^(sn1|sn2)-/.test(l.trim())).map((l) => l.trim())
   if (codes.length === 0) throw new Error('恢复码文件为空')
   return codes
 }
@@ -418,7 +512,10 @@ export async function exportMnemonic(passphrase: string, recoveryCode: string): 
 
 /** 导出 24 词助记词（模式 B：2 个恢复码，无设备场景） */
 export async function exportMnemonicFromCodes(recoveryCode1: string, recoveryCode2: string): Promise<{ mnemonicFile: string; address: string }> {
-  return exportMnemonicFromShares([decodeRecoveryCode(recoveryCode1), decodeRecoveryCode(recoveryCode2)])
+  const s1 = decodeRecoveryCode(recoveryCode1)
+  const s2 = decodeRecoveryCode(recoveryCode2)
+  assertSameShareSet([s1, s2]) // P1-2: 混用两个钱包的恢复码 → 批次不一致 → 拒绝
+  return exportMnemonicFromShares([s1, s2])
 }
 
 /** 共享实现：组合根熵 → 助记词落盘；地址与本地 metadata 交叉校验防错组合 */
@@ -517,7 +614,7 @@ export type RecoveryFileStatus = 'emailed' | 'local-only' | 'missing'
 export async function getRecoveryFileStatus(): Promise<RecoveryFileStatus> {
   try {
     const content = await fs.readFile(recoveryFile(), 'utf8')
-    const count = content.split('\n').filter((l) => l.trim().startsWith('sn1-')).length
+    const count = content.split('\n').filter((l) => /^(sn1|sn2)-/.test(l.trim())).length
     if (count >= 2) return 'local-only'
     if (count === 1) return 'emailed'
     return 'missing'
@@ -584,12 +681,19 @@ export async function wipeWallet(confirmPhrase: string, scope: WipeScope = 'all'
   return { removed }
 }
 
-/** 读取旧 metadata 中的地址（不存在返回 undefined） */
+/** 读取旧 metadata 中的地址（P1-3：仅 ENOENT 视为「不存在」返回 undefined；
+ * JSON 损坏/字段缺失/权限错误等一律硬失败——防损坏 metadata 被误判为无钱包
+ * 而绕过 init 防覆盖保护） */
 async function readOldAddress(): Promise<string | undefined> {
   try {
     const meta = JSON.parse(await fs.readFile(metaFile(), 'utf8')) as { address?: string }
-    return meta.address
-  } catch {
-    return undefined
+    const addr = meta.address
+    if (typeof addr !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(addr)) {
+      throw new Error(`metadata.json 损坏（缺少合法 address 字段）`)
+    }
+    return addr
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw err
   }
 }

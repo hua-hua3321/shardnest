@@ -2,11 +2,32 @@
 
 ## Architecture Layers (Thin Shell Model)
 
+> ⚠️ **Current implementation status**: the target architecture below (standalone
+> signing daemon + IPC + Keychain + OS dialogs) is a **roadmap goal, NOT yet
+> implemented** (P0-3). The MCP server currently imports CLI/signer directly and
+> runs key storage, recombination, and signing **in the same process** (single-process
+> architecture).
+>
+> **Security boundary under the single-process architecture**:
+> - ✅ **Implemented**: credential isolation — passphrase/recovery codes/private key/
+>   mnemonic **plaintext never enters the LLM context** (`passphrase_token` /
+>   `recovery_file_path` / `recovery_codes_file` channels)
+> - ✅ **Implemented**: passphrase-encrypted device share (scrypt + AES-GCM),
+>   2-of-3 threshold, in-memory zeroing of private keys after use
+> - ⚠️ **Not implemented (roadmap)**: standalone signing daemon, local IPC,
+>   Keychain/Keystore, OS dialogs — **compromising the MCP process equals the same
+>   filesystem access and code-execution power as CLI/signer**, including reading
+>   recovery-code files and recombining the wallet. Until a separate process lands,
+>   this project's security promise is "credentials never enter the LLM", NOT
+>   "compromising MCP yields no keys".
+
+### Target architecture (roadmap)
+
 ```
 MCP server (no keys) → local IPC → signing daemon (sole key holder)
 ```
 
-- Compromising the MCP layer yields zero key material.
+- Compromising the MCP layer yields zero key material (requires the standalone process).
 - Signing daemon: Keychain/Keystore protection + OS confirmation dialog + private key zeroed after use.
 
 ## Key Lifecycle
@@ -24,7 +45,7 @@ MCP server (no keys) → local IPC → signing daemon (sole key holder)
 | Threat | Mitigation | Residual Risk |
 |--------|-----------|---------------|
 | Service provider compromised | Zero key material | None |
-| User device compromised | Keychain + dialogs | Cannot defend a fully compromised device (same as hardware wallets) |
+| User device compromised | Passphrase-encrypted share + 2-of-3 threshold | Plaintext recovery-code files readable on full compromise (MCP shares process privileges in single-process architecture); Keychain + OS dialogs are roadmap goals, not landed |
 | Prompt injection | Platform endorsement + user confirmation | User misclicks (re-passphrase for high-value ops) |
 | Single share leaked | 2-of-3 threshold | Needs 2 shares leaked together |
 | Mnemonic file leaked | Local-only 0600 file; single-point risk disclosed at generation | **Leak = total loss (no threshold protection)**; write it offline then run `wipe saved` |
