@@ -307,7 +307,7 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(file.version).toBe(2)
     expect(file.share.kdf).toBeDefined()
     expect(file.share.kdf.alg).toBe('scrypt')
-    expect(file.share.kdf.N).toBe(2 ** 17) // O2: OWASP 下限
+    expect(file.share.kdf.N).toBe(2 ** 18) // P1-4: 已提升至 256MB（仍为 OWASP 量级）
     // 解密仍正常（v2 用持久化参数派生）
     const out = JSON.parse(await signMessage(PASSPHRASE, r.recoveryCodes[0], 'o1'))
     expect(out.address).toBe(r.address)
@@ -625,5 +625,12 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
 
   it('口令 <12 位 → 拒绝（强度校验）', async () => {
     await expect(initWallet('short')).rejects.toThrow(/至少 12 位/)
+  })
+
+  it('P1-4：低熵口令（如 Aaaaaaaaaaaa1，含 2 类但重复字符多）→ 拒绝（熵下限）', async () => {
+    // 表面满足"≥12 位 + 2 类 + 无序列"，但香农熵仅约 10 bits，必须被熵下限拦截
+    await expect(initWallet('Aaaaaaaaaaaa1')).rejects.toThrow(/熵过低/)
+    // 对照：正常混合口令应通过
+    await expect(initWallet('test-passphrase-123!')).resolves.toBeDefined()
   })
 })

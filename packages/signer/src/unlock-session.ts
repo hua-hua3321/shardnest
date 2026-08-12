@@ -129,11 +129,15 @@ export async function consumeUnlockSession(token: string, type: SessionType = 'u
       throw new Error('解锁会话已过期，请重新 unlock')
     }
     const data = JSON.parse(await fs.readFile(consuming, 'utf8')) as { v?: number; purpose?: PassphrasePurpose | null; nonce: string; ct: string }
-    // P1-7: 操作绑定校验——令牌用途与本次操作不一致即拒绝
-    // 会话含 purpose 时调用方必须传入匹配值（漏传即拒绝，防静默绕过）
-    // v:3 的 purpose 同时被 GCM AAD 认证，篡改为其他值同样解密失败）
-    if (data.purpose && purpose !== data.purpose) {
-      throw new Error(`口令令牌用途不匹配（令牌为 ${data.purpose ?? '未指定'}，本次操作为 ${purpose ?? '未指定'}）`)
+    // P1-7 (hardened): passphrase 会话必须绑定操作目的，防 create/restore 误用或静默绕过。
+    // unlock（私钥解锁）会话无操作语义、不绑 purpose——故仅在 passphrase 类型强制。
+    // 直接比较「调用方 purpose === 会话存储 purpose」（含 null 必须相等）：
+    //   · 调用方漏传 purpose → undefined !== 存储值 → 拒绝
+    //   · 误建的 null-purpose 口令会话 → 存储 null !== 调用方 'create'/'restore' → 拒绝
+    //   · 用途不匹配（create↔restore）→ 拒绝
+    // v:3 的 purpose 同时作为 GCM AAD，密文外 purpose 被篡改同样解密失败（纵深防御）。
+    if (type === 'passphrase' && purpose !== data.purpose) {
+      throw new Error(`口令令牌用途不匹配或缺失（令牌为 ${data.purpose ?? '未指定'}，本次操作为 ${purpose ?? '未指定'}）`)
     }
     const kek = sha256(new TextEncoder().encode(token))
     const nonce = Uint8Array.from(Buffer.from(data.nonce, 'base64'))

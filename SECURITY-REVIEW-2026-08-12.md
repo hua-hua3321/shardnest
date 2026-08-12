@@ -127,3 +127,55 @@ return { content: [{ type: 'text', text: JSON.stringify({ error: '...' }) }] }
 
 ---
 *审查基于静态代码阅读与跨包一致性核对，未做动态渗透/依赖 CVE 扫描。如需，我可补充：依赖漏洞扫描（osv-scanner）、针对 #1/#5 的最小修复补丁、或 P0-3 独立签名进程的详细设计。*
+
+---
+
+## 七、加固进展（2026-08-12 续 · 安全工程师落地）
+
+审查报告中承诺的"未完成任务"已推进如下：
+
+### 7.1 依赖漏洞扫描（OSV）✅ 完成
+- 解析 `bun.lock` 全部 **109 个解析版本**，经 OSV API 批量查询。
+- **结果：0 个已知 CVE / 漏洞**。关键密码学库均处安全版本：
+  `@noble/ciphers@1.3.0`、`@noble/curves@1.9.7`、`@noble/hashes@1.8.0`、`@scure/bip32@2.3.0`、`@scure/bip39@1.6.0`、`nodemailer@9.0.5`、`@modelcontextprotocol/sdk@1.30.0`、`zod@3.25.76`（及 mcp 内嵌 `zod@4.4.3`）、`typescript@5.9.3`。
+- 结论：依赖卫生维度无新增风险，与 P2 建议"CI 加 osv-scanner"一致——建议将本扫描固化进 CI。
+
+### 7.2 P0-1（MCP 错误响应 isError）✅ 已修复并通过测试
+- 代码已落地统一 `errResp()` 辅助函数，**全部 23 处显式错误返回均带 `isError: true`**（覆盖 `USER_REJECTED` / `WALLET_ADDRESS_MISMATCH` / `UNLOCK_INVALID` / `NO_WALLET` / `RESTORE_FAILED` / `PLATFORM_ADDRESS_NOT_CONFIGURED` / `ADDRESS_MISMATCH` / `WIPE_FAILED` / `EXPORT_FAILED` / `NEED_SECOND_RECOVERY_CODE` 等）。
+- 回归测试：`mcp.test.ts` 现有 **11 处 `expect(res.isError).toBe(true)` 断言**全部通过，双闸门拒绝不会再被 LLM 误判为成功。
+
+### 7.3 P1-7（passphrase purpose 绑定）✅ 加固并补回归测试
+- 原校验 `if (data.purpose && purpose !== data.purpose)` 对"误建的 null-purpose 口令会话"存在理论绕过窗口。
+- 加固为：对 `type === 'passphrase'` 会话直接比较 `purpose !== data.purpose`（含 null 必须相等），**同时封死两个窗口**：
+  1. 调用方漏传 purpose → 拒绝；
+  2. 经底层 `createUnlockSession(bytes,'passphrase')` 误建的 null-purpose 会话 → 拒绝（无 purpose 绑定 = 无约束，等同绕过）。
+- 仅作用于 passphrase 类型，`unlock`（私钥解锁）会话无操作语义、不受影响。
+- 新增回归测试（`unlock-session.test.ts`）：误建 null-purpose 会话 + 漏传 purpose 两条均断言拒绝。
+
+### 7.4 P0-3（独立签名守护进程）✅ 设计完成
+- 新增详细设计文档 `docs/DES-017-isolated-signing-daemon.md`：三进程信任边界、最小攻击面职责、本地认证 IPC 协议（HMAC + 防重放 + length-prefixed 二进制）、OS 原生批准弹窗（呼应 P1-2 所见即所签）、Keychain/secure enclave 密钥存储、seccomp/App Sandbox 沙箱、4 阶段向后兼容迁移路线、验收标准。
+
+### 7.5 验证结果
+- 全量测试：**147 pass / 0 fail**（core 30 · signer 12 · cli 57 · verify-sdk 5 · protocol 22 · mcp-server 21）。
+- 类型检查：`bunx tsc --noEmit` 通过，无错误。
+
+### 7.6 剩余待办（建议下一轮）
+- 审查报告中标为"未签名/仅长度校验"的 **P1-#2（display）** 与 **P1-#4 基础校验** 经代码核实**已落地**（walletSignMessage 为 v3 含 display 域分离签名；validatePassphrase 已实现字符类/重复/序列校验）。故真正剩余的 P1 项为 #3（重放）与 #4 的熵下限——均已在第二轮加固中处理（见 7.7 / 7.8）。
+- **[P2]** 邮件 TLS/STARTTLS 配置、令牌文件名前缀、lagrange 性能、依赖锁定固化进 CI、`@ts-expect-error` 封装。
+- 建议将 OSV 扫描 + `bun test` 固化进 CI，防止依赖与回归回归。
+
+### 7.7 第二轮加固（2026-08-12 续 · P1-#3 / P1-#4）
+
+- **P1-#3（重放全委托平台）→ 已加固**：新增 `packages/mcp-server/src/replay-guard.ts`（`ReplayGuard` 类），在 `signed_request_sign` 验签通过后、**消费解锁令牌前**拦截已用 nonce（key = `platformAddress:nonce`，惰性清理过期条目）。即使平台因 bug/被攻破在有效期内复用 nonce，钱包侧也能拒绝重放。新增回归测试：`mcp.test.ts`「P1-3：同 nonce 重放 → NONCE_REUSED」。
+- **P1-#4（口令仅长度校验）→ 已加固（两层）**：
+  1. `validatePassphrase` 新增**香农熵下限（≥30 bits）**，捕获"表面多类、实质弱"的口令（如 `Aaaaaaaaaaaa1` 约 10 bits 被拒）；辅助函数 `estimatePassphraseEntropy` 基于字符经验频率分布。新增回归测试：`commands.test.ts`「P1-4：低熵口令 → 拒绝」。
+  2. scrypt KEK 成本 `SCRYPT_OPTS.N: 2^17 → 2^18`（128MB→256MB，仍在上限 2^20 内；旧钱包 KDF 参数随密文持久化，向后兼容）。直接提高弱口令离线暴力破解成本。测试断言 `device-share.json` 持久化 N 同步更新为 `2^18`。
+
+### 7.8 验证结果（第二轮）
+- 全量测试：**149 pass / 0 fail**（core 30 · signer 12 · cli 58 · verify-sdk 5 · protocol 22 · mcp-server 22）。
+- 类型检查：`bunx tsc --noEmit` 通过。
+- 关键文件：`packages/mcp-server/src/replay-guard.ts`（新增）、`packages/mcp-server/src/index.ts`（接入重放防护）、`packages/cli/src/commands.ts`（熵下限）、`packages/core/src/keys.ts`（scrypt 成本）。
+
+### 7.9 剩余待办（建议后续轮次）
+- **[P2]** 邮件 TLS/STARTTLS 配置歧义、令牌文件名前缀泄露（建议改用 `sha256(token)`）、lagrange 逆元表性能、`@ts-expect-error` 封装、依赖锁定固化进 CI（osv-scanner）。
+- **[架构]** P0-3 独立签名守护进程：设计已完成（`docs/DES-017-isolated-signing-daemon.md`），待按 4 阶段路线落地（Phase 1 抽离 + IPC 即可最快消除单进程主风险）。

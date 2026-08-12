@@ -13,7 +13,7 @@ import { bytesToHex, randomBytes } from '@noble/hashes/utils'
 const CURVE_ORDER = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141')
 
 /** KEK 派生参数（scrypt 高成本防暴力破解；O1 起随密文持久化，可平滑升级） */
-export const SCRYPT_OPTS = { N: 2 ** 17, r: 8, p: 1, dkLen: 32 } as const // O2: OWASP 2023 下限（128MB）
+export const SCRYPT_OPTS = { N: 2 ** 18, r: 8, p: 1, dkLen: 32 } as const // P1-4: 提升至 256MB（仍为 OWASP 量级，远小于上限 2^20=1GiB）；旧钱包 KDF 参数随密文持久化，向后兼容
 
 /** v1 历史参数（C1：无 kdf 字段的旧钱包仅可能以 2^16 加密——回退必须用它而非新默认） */
 export const LEGACY_SCRYPT_OPTS_V1 = { N: 2 ** 16, r: 8, p: 1, dkLen: 32 } as const

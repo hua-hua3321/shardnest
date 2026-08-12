@@ -317,7 +317,21 @@ async function decryptShare(enc: { data: string; salt: string; kdf?: KdfParams }
   }
 }
 
-/** 口令强度校验（≥12 位 + 至少 2 种字符类 + 反模式检测，防弱口令爆破设备分片） */
+/** 香农熵估算（bits）：基于口令字符的经验频率分布，重复字符越多熵越低。
+ * 用于补强"字符类"检查的盲区——如 `Aaaaaaaaaaaa1` 含 2 类却熵极低。 */
+function estimatePassphraseEntropy(s: string): number {
+  const freq = new Map<string, number>()
+  for (const ch of s) freq.set(ch, (freq.get(ch) ?? 0) + 1)
+  const n = s.length
+  let h = 0
+  for (const c of freq.values()) {
+    const p = c / n
+    h -= p * Math.log2(p)
+  }
+  return h * n
+}
+
+/** 口令强度校验（≥12 位 + 至少 2 种字符类 + 反模式检测 + 熵下限，防弱口令爆破设备分片） */
 export function validatePassphrase(passphrase: string): void {
   if (passphrase.length < 12) {
     throw new Error('口令至少 12 位（建议混合大小写/数字/符号）')
@@ -348,6 +362,12 @@ export function validatePassphrase(passphrase: string): void {
         throw new Error('口令不能包含连续键盘或字母序列（≥4 位）')
       }
     }
+  }
+  // P1-4：熵下限（防低熵口令绕过"字符类"检查，如 Aaaaaaaaaaaa1）。
+  // 香农熵估算——重复字符越多熵越低，可捕获"表面多类、实质弱"的口令。
+  const entropy = estimatePassphraseEntropy(passphrase)
+  if (entropy < 30) {
+    throw new Error('口令熵过低（疑似弱口令），请使用更长或更随机的口令')
   }
 }
 

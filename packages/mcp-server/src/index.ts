@@ -17,6 +17,10 @@ import { z } from 'zod'
 import { verifySignedRequest, walletSignMessage, type SignedRequest } from '@wallet-services/protocol'
 import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile, restoreFromMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getHomeDir, type WipeScope } from '@wallet-services/cli'
 import {defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession, consumePassphraseSession, cleanupExpiredUnlockSessions} from '@wallet-services/signer'
+import { ReplayGuard } from './replay-guard'
+
+/** P1-3：钱包侧重放防护（模块级单例，跨 MCP server 实例共享） */
+const replayGuard = new ReplayGuard()
 
 export const PLATFORM_ADDRESS = process.env.SHARDNEST_PLATFORM_ADDRESS ?? ''
 
@@ -228,6 +232,12 @@ export function createShardnestServer(
         return errResp({ error: check.error })
       }
       const req = signed_request as SignedRequest
+
+      // P1-3：钱包侧重放防护（在消费解锁令牌前拦截，避免浪费一次性令牌）。
+      // key 按平台地址隔离；同一 nonce 在有效期内第二次出现即视为重放。
+      if (replayGuard.isReplay(`${platformAddress.toLowerCase()}:${req.nonce}`, req.expires_at * 1000)) {
+        return errResp({ error: 'NONCE_REUSED', message: '该 nonce 已被使用，疑似重放攻击' })
+      }
 
       // 纵深防御：wallet_address 必须与本地钱包一致（P1-3）
       let localAddress: string

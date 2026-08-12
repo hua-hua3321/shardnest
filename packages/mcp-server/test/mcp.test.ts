@@ -361,6 +361,31 @@ describe('shardnest MCP 薄壳', () => {
     expect(res.isError).toBe(true)
   })
 
+  it('P1-3：同 nonce 重放签名请求 → 第二次被拒（NONCE_REUSED，钱包侧兜底）', async () => {
+    const client = await connect()
+    const created = await createWallet(client, PASSPHRASE)
+    const req = issueSignedRequest({
+      action: 'bind_wallet',
+      intentHash: '0x' + 'be'.repeat(32),
+      display: '绑定钱包（重放测试）',
+      userId: 'user-replay',
+      walletAddress: created.address,
+      nonce: 'nonce-mcp-replay-00000001',
+      expiresAt: Math.floor(Date.now() / 1000) + 300,
+    }, platformPriv)
+    // 首次签名：成功（消费第一个解锁令牌）
+    const token1 = await createUnlockToken(PASSPHRASE, created.recoveryCodes[0])
+    const r1 = await client.callTool({ name: 'signed_request_sign', arguments: { signed_request: req, unlock_token: token1 } })
+    const out1 = JSON.parse(((r1.content as unknown[])[0] as { text: string }).text)
+    expect(out1.address).toBe(created.address)
+    // 同一 nonce 第二次出现（不同解锁令牌，模拟平台复用 nonce）→ 钱包侧拦截重放
+    const token2 = await createUnlockToken(PASSPHRASE, created.recoveryCodes[0])
+    const r2 = await client.callTool({ name: 'signed_request_sign', arguments: { signed_request: req, unlock_token: token2 } })
+    const out2 = JSON.parse(((r2.content as unknown[])[0] as { text: string }).text)
+    expect(out2.error).toBe('NONCE_REUSED')
+    expect(r2.isError).toBe(true)
+  })
+
   it('伪造背书（非平台签发）→ BAD_SIGNATURE 拒绝', async () => {
     const client = await connect()
     const fake = generatePrivateKey()

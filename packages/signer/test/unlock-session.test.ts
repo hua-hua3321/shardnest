@@ -59,4 +59,20 @@ describe('口令会话 purpose 绑定（P1-7 + GCM AAD 认证）', () => {
     const out = await consumeUnlockSession(token)
     expect(Buffer.from(out).toString('hex')).toBe(Buffer.from(priv).toString('hex'))
   })
+
+  it('P1-7 加固：误建的 null-purpose 口令会话（底层 createUnlockSession 不带 purpose）→ 拒绝', async () => {
+    // 直接走底层 API 创建不带 purpose 的 passphrase 会话，模拟误用/历史会话。
+    // unlock 会话单次使用，每条断言使用独立 token。
+    const bytes = new TextEncoder().encode('test-passphrase-123!')
+    const tokenCreate = await createUnlockSession(bytes, 'passphrase')
+    await expect(consumePassphraseSession(tokenCreate, 'create')).rejects.toThrow(/用途不匹配|缺失/)
+    const tokenRestore = await createUnlockSession(bytes, 'passphrase')
+    await expect(consumePassphraseSession(tokenRestore, 'restore')).rejects.toThrow(/用途不匹配|缺失/)
+  })
+
+  it('P1-7 加固：passphrase 会话消费漏传 purpose → 拒绝（防调用方静默绕过绑定）', async () => {
+    const token = await createPassphraseSession('test-passphrase-123!', 'create')
+    // consumeUnlockSession 的 purpose 形参缺省 undefined；passphrase 类型下必须被拒
+    await expect(consumeUnlockSession(token, 'passphrase')).rejects.toThrow(/用途不匹配|缺失/)
+  })
 })
