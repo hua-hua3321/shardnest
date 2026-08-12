@@ -2,11 +2,13 @@
   "name": "@wallet-service/mcp-server",
   "version": "0.3.0",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
   "bin": {
-    "shardnest-mcp": "src/index.ts"
+    "shardnest-mcp": "dist/index.js"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "bun run build",
     "test": "bun test"
   },
   "dependencies": {
@@ -17,5 +19,9 @@
     "@wallet-service/signer": "workspace:*",
     "@wallet-service/verify-sdk": "workspace:*",
     "zod": "^3.23.0"
-  }
+  },
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ]
 }

@@ -8,3 +8,6 @@ dist/
 
 # 测试隔离目录
 .test-shardnest-*/
+
+# IDE 自动生成的 repowiki 缓存（不入库）
+.qoder/

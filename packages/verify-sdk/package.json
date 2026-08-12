@@ -2,10 +2,18 @@
   "name": "@wallet-service/verify-sdk",
   "version": "0.3.0",
   "type": "module",
-  "main": "src/index.ts",
-  "scripts": { "test": "bun test" },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "bun run build",
+    "test": "bun test"
+  },
   "dependencies": {
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.4.0"
-  }
+  },
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ]
 }

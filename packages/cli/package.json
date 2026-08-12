@@ -2,14 +2,13 @@
   "name": "@wallet-service/cli",
   "version": "0.2.0",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
   "exports": {
-    ".": "./src/api.ts"
-  },
-  "bin": {
-    "shardnest": "src/index.ts"
+    ".": "./dist/api.js"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "bun run build",
     "test": "bun test"
   },
   "dependencies": {
@@ -19,5 +18,9 @@
     "@wallet-service/core": "workspace:*",
     "@wallet-service/signer": "workspace:*",
     "nodemailer": "^9.0.5"
-  }
+  },
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ]
 }

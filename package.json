@@ -6,7 +6,7 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "build": "bun run --cwd packages/core build",
-    "test": "bun test packages/core/test",
+    "test": "for p in core signer cli verify-sdk protocol mcp-server; do (cd packages/$p && bun test) || exit 1; done",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

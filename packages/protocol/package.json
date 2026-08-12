@@ -2,12 +2,20 @@
   "name": "@wallet-service/protocol",
   "version": "0.3.0",
   "type": "module",
-  "main": "src/index.ts",
-  "scripts": { "test": "bun test" },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "bun run build",
+    "test": "bun test"
+  },
   "dependencies": {
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.4.0",
     "@wallet-service/core": "workspace:*",
     "@wallet-service/verify-sdk": "workspace:*"
-  }
+  },
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ]
 }
