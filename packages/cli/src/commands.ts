@@ -21,13 +21,13 @@ import {
   LEGACY_SCRYPT_OPTS_V1,
   type KdfParams,
   type Share,
-} from '@wallet-service/core'
+} from '@wallet-services/core'
 import { gcm } from '@noble/ciphers/aes'
 import { sendBackupShare } from './mailer'
-import { createUnlockSession, getUnlockDir } from '@wallet-service/signer'
+import { createUnlockSession, getUnlockDir } from '@wallet-services/signer'
 import { randomBytes } from '@noble/hashes/utils'
 import { randomUUID } from 'node:crypto'
-import { entropyToMnemonic, mnemonicToEntropy, generateEntropy } from '@wallet-service/core'
+import { entropyToMnemonic, mnemonicToEntropy, generateEntropy } from '@wallet-services/core'
 
 /** 钱包目录（动态读取 env，便于测试隔离） */
 export function getHomeDir(): string {
@@ -352,7 +352,7 @@ async function createWalletFromEntropy(
   email?: string,
   mnemonic = false,
 ): Promise<InitResult> {
-  const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+  const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-services/core')
   const privateKey = derivePrivateKeyFromEntropy(entropy) // BIP-39/44 派生
   const address = privateKeyToAddress(privateKey)
   const shares = splitSecret(entropy, { shares: 3, threshold: 2 })
@@ -418,7 +418,7 @@ export async function restoreFromMnemonic(
   validatePassphrase(passphrase)
   const entropy = mnemonicToEntropy(mnemonic) // O4A: 标准 24 词 → 熵（校验和校验）
   try {
-    const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+    const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-services/core')
     const address = privateKeyToAddress(derivePrivateKeyFromEntropy(entropy))
 
     const want = expectedAddress ?? (await readOldAddress())
@@ -452,8 +452,8 @@ export async function signMessage(passphrase: string, recoveryCode: string, mess
   const enc = JSON.parse(await fs.readFile(deviceFile(), 'utf8')) as { share: { data: string; salt: string } }
   const share1 = await decryptShare(enc.share, passphrase)
   const share2 = decodeRecoveryCode(recoveryCode)
-  const { WalletVault } = await import('@wallet-service/signer')
-  const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+  const { WalletVault } = await import('@wallet-services/signer')
+  const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-services/core')
   const vault = new WalletVault()
   const entropy = combineShares([share1, share2]) // O4A: 重组根熵
   let privateKey: Uint8Array | null = null
@@ -504,7 +504,7 @@ export async function restoreWallet(
   const fresh = reshareShares(shares, { shares: 3, threshold: 2 })
   const enc = await encryptShare(fresh[0], passphrase)
   const entropy = combineShares([fresh[0], fresh[1]]) // O4A: 重组根熵
-  const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+  const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-services/core')
   const privateKey = derivePrivateKeyFromEntropy(entropy) // BIP-39/44 派生
   const address = privateKeyToAddress(privateKey)
 
@@ -611,7 +611,7 @@ export async function exportMnemonicFromCodes(recoveryCode1: string, recoveryCod
 
 /** 共享实现：组合根熵 → 助记词落盘；地址与本地 metadata 交叉校验防错组合 */
 async function exportMnemonicFromShares(shares: Share[]): Promise<{ mnemonicFile: string; address: string }> {
-  const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+  const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-services/core')
   const entropy = combineShares(shares) // O4A: 重组根熵
   let mnemonicFile: string
   let address: string
@@ -642,7 +642,7 @@ export async function createUnlockToken(passphrase: string, recoveryCode: string
   let privateKey: Uint8Array | null = null
   const entropy = combineShares([share1, share2]) // O4A: 重组根熵
   try {
-    const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+    const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-services/core')
     privateKey = derivePrivateKeyFromEntropy(entropy) // BIP-39/44 派生
     // 地址交叉校验：防止输错恢复码生成「垃圾私钥」令牌（签名被拒且用户不知原因）
     const want = await readOldAddress()

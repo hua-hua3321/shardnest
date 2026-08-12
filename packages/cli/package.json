@@ -1,5 +1,5 @@
 {
-  "name": "@wallet-service/cli",
+  "name": "@wallet-services/cli",
   "version": "0.2.0",
   "type": "module",
   "main": "dist/index.js",
@@ -18,8 +18,8 @@
     "@noble/ciphers": "^1.0.0",
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.4.0",
-    "@wallet-service/core": "workspace:*",
-    "@wallet-service/signer": "workspace:*",
+    "@wallet-services/core": "workspace:*",
+    "@wallet-services/signer": "workspace:*",
     "nodemailer": "^9.0.5"
   },
   "types": "dist/api.d.ts",

@@ -32,7 +32,7 @@ User Agent environment:
 
 ```bash
 # Platform side needs: protocol (issuance) + verify-sdk (verification)
-bun add @wallet-service/protocol @wallet-service/verify-sdk
+bun add @wallet-services/protocol @wallet-services/verify-sdk
 # or reference via source workspace
 ```
 
@@ -41,7 +41,7 @@ bun add @wallet-service/protocol @wallet-service/verify-sdk
 ## Step 2: Issue a signed_request (platform side)
 
 ```ts
-import { issueSignedRequest } from '@wallet-service/protocol'
+import { issueSignedRequest } from '@wallet-services/protocol'
 
 const request = issueSignedRequest({
   action: 'withdraw_confirm',          // business action (sign_message/sign_tx/bind_wallet/withdraw_confirm)
@@ -70,7 +70,7 @@ The user's Agent calls MCP `signed_request_sign` (args `signed_request` + `unloc
 ## Step 4: Verify on the platform (verify-sdk)
 
 ```ts
-import { recoverSigner } from '@wallet-service/verify-sdk'
+import { recoverSigner } from '@wallet-services/verify-sdk'
 
 const { message, signature } = signedResponse   // signature: 65 bytes r||s||v (hex)
 const recovered = recoverSigner(message, hexToBytes(signature))

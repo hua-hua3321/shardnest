@@ -1,5 +1,5 @@
 {
-  "name": "@wallet-service/protocol",
+  "name": "@wallet-services/protocol",
   "version": "0.3.0",
   "type": "module",
   "main": "dist/index.js",
@@ -11,8 +11,8 @@
   "dependencies": {
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.4.0",
-    "@wallet-service/core": "workspace:*",
-    "@wallet-service/verify-sdk": "workspace:*"
+    "@wallet-services/core": "workspace:*",
+    "@wallet-services/verify-sdk": "workspace:*"
   },
   "types": "dist/index.d.ts",
   "files": [

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
-import { splitSecret } from '@wallet-service/core'
-import { deriveKEK, LEGACY_SCRYPT_OPTS_V1 } from '@wallet-service/core'
+import { splitSecret } from '@wallet-services/core'
+import { deriveKEK, LEGACY_SCRYPT_OPTS_V1 } from '@wallet-services/core'
 import { gcm } from '@noble/ciphers/aes'
 import { randomBytes } from '@noble/hashes/utils'
 import { promises as fs } from 'node:fs'
@@ -332,7 +332,7 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
         salt: Buffer.from(salt).toString('base64'),
       },
     }
-    const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-service/core')
+    const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-services/core')
     const address = privateKeyToAddress(derivePrivateKeyFromEntropy(entropy))
     await fs.mkdir(getHomeDir(), { recursive: true })
     await fs.writeFile(path.join(getHomeDir(), 'device-share.json'), JSON.stringify(v1), { mode: 0o600 })

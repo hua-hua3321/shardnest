@@ -1,5 +1,5 @@
 {
-  "name": "@wallet-service/signer",
+  "name": "@wallet-services/signer",
   "version": "0.2.0",
   "type": "module",
   "main": "dist/index.js",
@@ -12,7 +12,7 @@
     "@noble/ciphers": "^1.0.0",
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.4.0",
-    "@wallet-service/core": "workspace:*"
+    "@wallet-services/core": "workspace:*"
   },
   "types": "dist/index.d.ts",
   "files": [

@@ -126,9 +126,9 @@ Sensitive credentials never appear in tool arguments — they travel via local t
 
 ## Platform integration (any business platform)
 
-1. **Issue**: platform signs a `signed_request` with its own private key (`@wallet-service/protocol` `issueSignedRequest`).
+1. **Issue**: platform signs a `signed_request` with its own private key (`@wallet-services/protocol` `issueSignedRequest`).
 2. **Sign**: user's Agent calls MCP `signed_request_sign` — endorsement verified, `wallet_address` checked, user confirms, local token consumed, EIP-191 signature returned.
-3. **Verify**: platform runs `@wallet-service/verify-sdk` `recoverSigner(message, sig)` → recovered address must match the bound `wallet_address`.
+3. **Verify**: platform runs `@wallet-services/verify-sdk` `recoverSigner(message, sig)` → recovered address must match the bound `wallet_address`.
 
 See [protocol/README.md](protocol/README.md) for the `signed_request` v1 spec & JSON Schema.
 

@@ -11,68 +11,65 @@
       },
     },
     "packages/cli": {
-      "name": "@wallet-service/cli",
+      "name": "@wallet-services/cli",
       "version": "0.2.0",
-      "bin": {
-        "shardnest": "src/index.ts",
-      },
       "dependencies": {
         "@noble/ciphers": "^1.0.0",
         "@noble/curves": "^1.4.0",
         "@noble/hashes": "^1.4.0",
-        "@wallet-service/core": "workspace:*",
-        "@wallet-service/signer": "workspace:*",
+        "@wallet-services/core": "workspace:*",
+        "@wallet-services/signer": "workspace:*",
         "nodemailer": "^9.0.5",
       },
     },
     "packages/core": {
-      "name": "@wallet-service/core",
+      "name": "@wallet-services/core",
       "version": "0.1.0",
       "dependencies": {
         "@noble/curves": "^1.4.0",
         "@noble/hashes": "^1.4.0",
-        "@scure/bip32": "^2.3.0",
+        "@scure/bip32": "2.3.0",
         "@scure/bip39": "^1.3.0",
       },
     },
     "packages/mcp-server": {
-      "name": "@wallet-service/mcp-server",
+      "name": "@wallet-services/mcp-server",
       "version": "0.3.0",
       "bin": {
-        "shardnest-mcp": "src/index.ts",
+        "shardnest-mcp": "dist/index.js",
       },
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.30.0",
-        "@wallet-service/cli": "workspace:*",
-        "@wallet-service/core": "workspace:*",
-        "@wallet-service/protocol": "workspace:*",
-        "@wallet-service/signer": "workspace:*",
-        "@wallet-service/verify-sdk": "workspace:*",
+        "@wallet-services/cli": "workspace:*",
+        "@wallet-services/core": "workspace:*",
+        "@wallet-services/protocol": "workspace:*",
+        "@wallet-services/signer": "workspace:*",
+        "@wallet-services/verify-sdk": "workspace:*",
         "zod": "^3.23.0",
       },
     },
     "packages/protocol": {
-      "name": "@wallet-service/protocol",
+      "name": "@wallet-services/protocol",
       "version": "0.3.0",
       "dependencies": {
         "@noble/curves": "^1.4.0",
         "@noble/hashes": "^1.4.0",
-        "@wallet-service/core": "workspace:*",
-        "@wallet-service/verify-sdk": "workspace:*",
+        "@wallet-services/core": "workspace:*",
+        "@wallet-services/verify-sdk": "workspace:*",
       },
     },
     "packages/signer": {
-      "name": "@wallet-service/signer",
+      "name": "@wallet-services/signer",
       "version": "0.2.0",
       "dependencies": {
         "@noble/ciphers": "^1.0.0",
         "@noble/curves": "^1.4.0",
         "@noble/hashes": "^1.4.0",
-        "@wallet-service/core": "workspace:*",
+        "@wallet-services/core": "workspace:*",
       },
     },
     "packages/verify-sdk": {
-      "name": "@wallet-service/verify-sdk",
+      "name": "@wallet-services/verify-sdk",
       "version": "0.3.0",
       "dependencies": {
         "@noble/curves": "^1.4.0",
@@ -103,17 +100,17 @@
 
     "@types/nodemailer": ["@types/nodemailer@8.0.1", "https://registry.npmmirror.com/@types/nodemailer/-/nodemailer-8.0.1.tgz", { "dependencies": { "@types/node": "*" } }, "sha512-PxpaInm8V1JQDd4j0ds5HfvWQk8JupS1C0Picb96QJsrrRDjBH+DlK7L4ZdNSqNULhiZRQHc40nLVShaGxXAMw=="],
 
-    "@wallet-service/cli": ["@wallet-service/cli@workspace:packages/cli"],
+    "@wallet-services/cli": ["@wallet-services/cli@workspace:packages/cli"],
 
-    "@wallet-service/core": ["@wallet-service/core@workspace:packages/core"],
+    "@wallet-services/core": ["@wallet-services/core@workspace:packages/core"],
 
-    "@wallet-service/mcp-server": ["@wallet-service/mcp-server@workspace:packages/mcp-server"],
+    "@wallet-services/mcp-server": ["@wallet-services/mcp-server@workspace:packages/mcp-server"],
 
-    "@wallet-service/protocol": ["@wallet-service/protocol@workspace:packages/protocol"],
+    "@wallet-services/protocol": ["@wallet-services/protocol@workspace:packages/protocol"],
 
-    "@wallet-service/signer": ["@wallet-service/signer@workspace:packages/signer"],
+    "@wallet-services/signer": ["@wallet-services/signer@workspace:packages/signer"],
 
-    "@wallet-service/verify-sdk": ["@wallet-service/verify-sdk@workspace:packages/verify-sdk"],
+    "@wallet-services/verify-sdk": ["@wallet-services/verify-sdk@workspace:packages/verify-sdk"],
 
     "accepts": ["accepts@2.0.0", "https://registry.npmmirror.com/accepts/-/accepts-2.0.0.tgz", { "dependencies": { "mime-types": "^3.0.0", "negotiator": "^1.0.0" } }, "sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng=="],
 

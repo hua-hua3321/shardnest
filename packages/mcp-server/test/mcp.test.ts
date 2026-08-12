@@ -1,15 +1,15 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
-import { getHomeDir } from '@wallet-service/cli'
+import { getHomeDir } from '@wallet-services/cli'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { createShardnestServer } from '../src/index'
-import { issueSignedRequest, walletSignMessage } from '@wallet-service/protocol'
-import { generatePrivateKey, privateKeyToAddress } from '@wallet-service/core'
-import { recoverSigner } from '@wallet-service/verify-sdk'
-import { createUnlockToken } from '@wallet-service/cli'
-import {createPassphraseSession, defaultApproval} from '@wallet-service/signer'
+import { issueSignedRequest, walletSignMessage } from '@wallet-services/protocol'
+import { generatePrivateKey, privateKeyToAddress } from '@wallet-services/core'
+import { recoverSigner } from '@wallet-services/verify-sdk'
+import { createUnlockToken } from '@wallet-services/cli'
+import {createPassphraseSession, defaultApproval} from '@wallet-services/signer'
 
 const TEST_HOME = path.join(process.cwd(), '.test-shardnest-mcp')
 

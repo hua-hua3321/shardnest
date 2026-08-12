@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test'
 import { issueSignedRequest, verifySignedRequest, canonicalBytes, walletSignMessage } from '../src/signed-request'
-import { generatePrivateKey, privateKeyToAddress } from '@wallet-service/core'
+import { generatePrivateKey, privateKeyToAddress } from '@wallet-services/core'
 
 /** 平台密钥对 */
 const platformPriv = generatePrivateKey()

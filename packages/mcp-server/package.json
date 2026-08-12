@@ -1,5 +1,5 @@
 {
-  "name": "@wallet-service/mcp-server",
+  "name": "@wallet-services/mcp-server",
   "version": "0.3.0",
   "type": "module",
   "main": "dist/index.js",
@@ -13,11 +13,11 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@wallet-service/cli": "workspace:*",
-    "@wallet-service/core": "workspace:*",
-    "@wallet-service/protocol": "workspace:*",
-    "@wallet-service/signer": "workspace:*",
-    "@wallet-service/verify-sdk": "workspace:*",
+    "@wallet-services/cli": "workspace:*",
+    "@wallet-services/core": "workspace:*",
+    "@wallet-services/protocol": "workspace:*",
+    "@wallet-services/signer": "workspace:*",
+    "@wallet-services/verify-sdk": "workspace:*",
     "zod": "^3.23.0"
   },
   "types": "dist/index.d.ts",

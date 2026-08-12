@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 发布 @wallet-service/* 到 npm（依赖拓扑顺序）
+# 发布 @wallet-services/* 到 npm（依赖拓扑顺序）
 # 用法: bash scripts/publish.sh [--dry-run]
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -16,7 +16,7 @@ version_of() {
     cli) echo "0.2.0" ;;
     mcp-server) echo "0.3.0" ;;
     protocol) echo "0.3.0" ;;
-    verify-sdk) echo "0.3.0" ;;
+    verify-sdk) echo "0.3.1" ;;
     *) echo "0.0.0" ;;
   esac
 }
@@ -39,7 +39,7 @@ for dep_type in ('dependencies', 'devDependencies', 'peerDependencies', 'optiona
     deps = pkg.get(dep_type) or {}
     for k in list(deps):
         if deps[k] == 'workspace:*':
-            sub = k.replace('@wallet-service/', '')
+            sub = k.replace('@wallet-services/', '')
             if sub not in mapping:
                 raise SystemExit(f'unknown workspace dep {k} in {name}')
             deps[k] = f'^{mapping[sub]}'
@@ -54,7 +54,7 @@ done
 
 # ── 逐包发布（prepublishOnly 自动构建）──
 for p in "${PACKAGES[@]}"; do
-  echo "=== @wallet-service/$p@$(version_of "$p") ==="
+  echo "=== @wallet-services/$p@$(version_of "$p") ==="
   (cd "packages/$p" && npm publish --access public --registry https://registry.npmjs.org ${DRY:+--dry-run})
 done
 echo "全部发布完成 ✅"

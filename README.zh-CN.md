@@ -115,9 +115,9 @@ bun packages/mcp-server/src/index.ts
 
 ## 业务平台接入（任意平台）
 
-1. **签发**：平台用自持私钥签发 `signed_request`（`@wallet-service/protocol` 的 `issueSignedRequest`）。
+1. **签发**：平台用自持私钥签发 `signed_request`（`@wallet-services/protocol` 的 `issueSignedRequest`）。
 2. **签名**：用户 Agent 调用 MCP `signed_request_sign`——验背书、校验 `wallet_address`、用户确认、消费本地令牌、返回 EIP-191 签名。
-3. **验签**：平台用 `@wallet-service/verify-sdk` 的 `recoverSigner(message, sig)` 还原地址，必须与绑定的 `wallet_address` 一致。
+3. **验签**：平台用 `@wallet-services/verify-sdk` 的 `recoverSigner(message, sig)` 还原地址，必须与绑定的 `wallet_address` 一致。
 
 `signed_request` v1 规范与 JSON Schema 见 [protocol/README.md](protocol/README.md)。
 

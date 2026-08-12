@@ -10,7 +10,7 @@
  */
 import * as readline from 'node:readline'
 import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getRecoveryFileStatus, tryReadRecoveryCodeFromFile } from './commands'
-import { createPassphraseSession } from '@wallet-service/signer'
+import { createPassphraseSession } from '@wallet-services/signer'
 import { t } from './i18n'
 
 /** 交互终端（TTY）时惰性创建 readline；管道/非 TTY 走 console 迭代器（Bun 下 readline 与管道 stdin 不兼容） */

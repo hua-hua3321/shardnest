@@ -11,7 +11,7 @@
  */
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
-import type { Share } from '@wallet-service/core'
+import type { Share } from '@wallet-services/core'
 
 /** EIP-191 前缀消息哈希 */
 function personalMessageHash(message: Uint8Array): Uint8Array {

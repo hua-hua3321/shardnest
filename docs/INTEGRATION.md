@@ -32,7 +32,7 @@ tags: ['integration', 'third-party', 'signed-request', 'verify-sdk']
 
 ```bash
 # 平台侧需要：protocol（签发）+ verify-sdk（验签）
-bun add @wallet-service/protocol @wallet-service/verify-sdk
+bun add @wallet-services/protocol @wallet-services/verify-sdk
 # 或从源码 workspace 引用
 ```
 
@@ -41,7 +41,7 @@ bun add @wallet-service/protocol @wallet-service/verify-sdk
 ## 第二步：签发 signed_request（平台侧）
 
 ```ts
-import { issueSignedRequest } from '@wallet-service/protocol'
+import { issueSignedRequest } from '@wallet-services/protocol'
 
 // 平台自持私钥（仅用于签发背书；用完即弃）
 const request = issueSignedRequest({
@@ -71,7 +71,7 @@ const request = issueSignedRequest({
 ## 第四步：平台验签（verify-sdk）
 
 ```ts
-import { recoverSigner } from '@wallet-service/verify-sdk'
+import { recoverSigner } from '@wallet-services/verify-sdk'
 
 const { message, signature } = signedResponse   // signature: 65 字节 r||s||v（hex）
 const recovered = recoverSigner(message, hexToBytes(signature))
