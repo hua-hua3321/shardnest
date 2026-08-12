@@ -10,15 +10,7 @@ PACKAGES=(core signer verify-sdk protocol cli mcp-server)
 # 版本号映射（Bash 3.2 兼容：macOS 默认 Bash 3.2 不支持 declare -A 关联数组，
 # 用普通函数 + case 替代）
 version_of() {
-  case "$1" in
-    core) echo "0.1.0" ;;
-    signer) echo "0.2.0" ;;
-    cli) echo "0.2.0" ;;
-    mcp-server) echo "0.3.0" ;;
-    protocol) echo "0.3.0" ;;
-    verify-sdk) echo "0.3.1" ;;
-    *) echo "0.0.0" ;;
-  esac
+  echo "0.3.1"
 }
 
 # ── 备份原始 package.json（发布后还原，保留 workspace:* 供本地开发）──
@@ -52,9 +44,14 @@ print(f'resolved workspace:* in {name}')
 PY
 done
 
-# ── 逐包发布（prepublishOnly 自动构建）──
+# ── 逐包发布（prepublishOnly 自动构建；版本已存在则跳过，幂等）──
 for p in "${PACKAGES[@]}"; do
-  echo "=== @wallet-services/$p@$(version_of "$p") ==="
+  ver=$(version_of "$p")
+  if npm view "@wallet-services/$p@$ver" version --registry https://registry.npmjs.org > /dev/null 2>&1; then
+    echo "=== @wallet-services/$p@$ver 已存在，跳过 ==="
+    continue
+  fi
+  echo "=== @wallet-services/$p@$ver ==="
   (cd "packages/$p" && npm publish --access public --registry https://registry.npmjs.org ${DRY:+--dry-run})
 done
 echo "全部发布完成 ✅"
