@@ -93,13 +93,13 @@ MCP server（无密钥）→ 本地 IPC → 签名守护进程（唯一持钥者
 |------|------|------|
 | 🔴 P0-3 | 文档宣称进程隔离/IPC/Keychain 已实现（实际单进程）| 文档区分「已实现/路线图」；明确当前承诺是「凭证不进 LLM」而非「MCP 被攻破无密钥」 |
 | 🟠 P1-2 | 恢复码无钱包/批次绑定——混用两套恢复码静默创建第三方钱包 | `sn2` 格式加随机 `share_set_id`，同批分片必须一致 |
-| 🟠 P1-6 | 钱包签名仅 `action:intent_hash`，可脱离请求传播 | 签名内容绑定 `wallet_address` + `nonce`（域分离）|
+| 🟠 P1-6 | 钱包签名仅 `action:intent_hash`，可脱离请求传播 | 签名内容绑定 `wallet_address`/`platform_address`/`action`/`intent_hash`/`nonce`/`expires_at`/`user_id`（域分离）|
 | 🟠 P1-7 | 口令令牌不区分 create/restore 操作 | 令牌绑定操作类型（create/restore 前缀隔离）|
 
 ## 已知边界（诚实披露）
 
 1. **物理抹除不保证**：APFS/SSD 等 copy-on-write 文件系统上，`secureDelete` 的 3 遍覆写**无法保证物理抹除**（覆写可能落到新块，旧块仍可被取证恢复）。本机制主要防**软件层**恢复（普通文件读取/回收站/简单恢复工具）。追求物理抹除需全盘加密 + 介质销毁。
-2. **平台必须校验地址绑定**：`signed_request_sign` 的签名内容为 `action:intent_hash`（不含 `wallet_address`）。签名防重放/防冒用依赖平台侧用 `verify-sdk` 的 `recoverSigner(message, sig)` 还原地址并与绑定的 `wallet_address` 比对——**平台必须做该绑定校验**，仅验签名有效性不足以防跨地址重放。
+2. **平台必须校验签名者地址**：`signed_request_sign` 的签名内容为域分离请求上下文（绑定 `wallet_address` / `platform_address` / `action` / `intent_hash` / `nonce` / `expires_at` / `user_id`，经 `protocol.walletSignMessage` 统一构造）。平台侧应使用 `verify-sdk` 的 `recoverSigner`/`verifySignature` 还原签名者地址并与请求绑定的 `wallet_address` 比对——**平台必须做该绑定校验**，仅验签名有效性不足以防跨地址重放。
 3. **scrypt 参数**：N=2^17（约 128MB/次，OWASP 2023 下限）——本地单用户可接受；参数随密文持久化（O1），未来可平滑调高。
 
 ## 依赖审计要求

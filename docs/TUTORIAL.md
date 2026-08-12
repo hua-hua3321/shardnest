@@ -85,7 +85,7 @@ bun packages/cli/src/index.ts unlock
 ```
 
 4. **签名**（MCP `signed_request_sign`，参数 `signed_request` + `unlock_token`）：
-   双闸门 = 平台背书验签 + 宿主 approval 确认，签名内容为 `action:intent_hash`
+   双闸门 = 平台背书验签 + 宿主 approval 确认，签名内容 = 域分离请求上下文（绑定 `wallet_address`/`platform_address`/`action`/`intent_hash`/`nonce`/`expires_at`/`user_id`）
 
 > 恢复码来源引导：`unlock`/`sign` 前会按本地存储状态提示第二因素应来自哪里
 > （邮箱片3 / 离线副本），请遵循提示选择来源。

@@ -19,7 +19,7 @@ packages/
 ├── core/         # 纯密码学：熵生成、SSS 分片（GF(2^8)）、BIP-39/44 派生、scrypt/AES-GCM
 ├── signer/       # 签名守护：WalletVault（注入已派生私钥→EIP-191 签名→wipe）、令牌会话
 ├── cli/          # CLI 形态（人类场景；i18n 中英）
-├── mcp-server/   # MCP 薄壳（无密钥；6 工具；approval 闸门）
+├── mcp-server/   # MCP 薄壳（凭证不进 LLM；6 工具；approval 闸门——独立无密钥进程为路线图）
 ├── verify-sdk/   # 平台侧验签 SDK（仅验签）
 └── protocol/     # signed_request v1 规范（canonicalBytes + JSON Schema）
 docs/             # 安全模型/教程/修改说明/开发指南/接入指南（中英双份）

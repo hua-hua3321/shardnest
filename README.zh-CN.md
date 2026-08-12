@@ -107,7 +107,7 @@ bun packages/mcp-server/src/index.ts
 | `wallet_create` | `passphrase_token`、`email?`、`generate_mnemonic?` | 返回 `recovery_codes_file` / `mnemonic_file` 路径（明文不进 LLM）；**钱包已存在时拒绝**（`WALLET_EXISTS`，不消费令牌）——重建需先 `wallet_wipe`（宿主 approval 确认）或 CLI `init` 交互确认 |
 | `wallet_address` | — | 当前地址 |
 | `wallet_mnemonic_export` | — | 需确认闸门；24 词助记词写入本地文件，仅返回路径 |
-| `signed_request_sign` | `signed_request`、`unlock_token` | 双闸门（平台背书 + 用户确认）；签 `action:intent_hash` |
+| `signed_request_sign` | `signed_request`、`unlock_token` | 双闸门（平台背书 + 用户确认）；签名 = 域分离请求上下文（wallet_address/platform_address/action/intent_hash/nonce/expires_at/user_id） |
 | `wallet_restore` | `recovery_file_path?` / `mnemonic_file_path?`、`passphrase_token`、`expected_address?`、`email?` | 文件路径必须在钱包目录内 |
 | `wallet_wipe` | `scope?`（默认 `saved` / `all`） | 需确认闸门；返回删除文件清单 |
 
@@ -127,7 +127,7 @@ signer                      WalletVault（唯一持钥者）· 确认闸门 · �
 cli                         命令实现 · 恢复码 CRC · SMTP 备份
 verify-sdk                  平台侧 EIP-191 验签（verify-only，零密钥）
 protocol                    signed_request v1——平台背书签发/验签
-mcp-server                  无密钥薄壳，接线双闸门
+mcp-server                  薄壳（凭证不进 LLM；独立无密钥进程为路线图），接线双闸门
 ```
 
 密码学不变式见 [AGENTS.md](AGENTS.md)——改动密码学代码前务必阅读（GF(2^8) 生成元必须为 3、EIP-191 哈希三处字节级一致、恢复码 CRC 覆盖 `index:hex`、所有路径内存清零）。

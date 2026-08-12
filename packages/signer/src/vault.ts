@@ -6,7 +6,8 @@
  * - EIP-191 消息签名
  * - 拒绝暴露私钥：signMessage 是唯一对外签名入口
  *
- * 安全边界：本类是进程内唯一持有私钥明文的组件；MCP 薄壳无密钥。
+ * 安全边界：本类是进程内唯一持有私钥明文的组件；MCP 与 signer 当前同进程
+ * （凭证不进 LLM；独立无密钥 MCP 进程为路线图 P0-3）。
  */
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'

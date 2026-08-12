@@ -65,7 +65,7 @@ The user's Agent calls MCP `signed_request_sign` (args `signed_request` + `unloc
 1. Gate 1: the wallet service verifies the platform endorsement (`verifySignedRequest`) — rejects non-platform issuances
 2. Gate 2: host approval (default allows only `sign_message`; other actions require host config)
 3. `wallet_address` must match the local wallet
-4. Consume the unlock token (single-use) -> sign `action:intent_hash` locally -> return `{ address, signature }`
+4. Consume the unlock token (single-use) -> sign the domain-separated request context locally -> return `{ address, signature }`
 
 ## Step 4: Verify on the platform (verify-sdk)
 

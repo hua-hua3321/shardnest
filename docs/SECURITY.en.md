@@ -100,7 +100,7 @@ MCP server (no keys) → local IPC → signing daemon (sole key holder)
 ## Known Boundaries (honest disclosure)
 
 1. **Physical erasure not guaranteed**: on copy-on-write filesystems (APFS/SSD), `secureDelete`'s 3× overwrite **cannot guarantee physical erasure** (overwrites may land on new blocks; old blocks may remain forensically recoverable). This mechanism primarily defeats **software-layer** recovery (plain file reads, trash, simple recovery tools). For physical erasure, use full-disk encryption + media destruction.
-2. **Platforms must verify address binding**: `signed_request_sign` signs `action:intent_hash` (no `wallet_address` embedded). Replay/impersonation resistance relies on the platform verifying with `verify-sdk`'s `recoverSigner(message, sig)` and comparing against the bound `wallet_address` — **the platform must perform this binding check**; signature validity alone is insufficient.
+2. **Platforms must verify the signer address**: `signed_request_sign` signs the domain-separated request context (binding `wallet_address` / `platform_address` / `action` / `intent_hash` / `nonce` / `expires_at` / `user_id`, built via `protocol.walletSignMessage`). Platforms must use `verify-sdk`'s `recoverSigner`/`verifySignature` to recover the signer address and compare it against the bound `wallet_address` — **the platform must perform this binding check**; signature validity alone is insufficient against cross-address replay.
 3. **scrypt parameters**: N=2^17 (~128MB/derivation, OWASP 2023 floor) — acceptable for a local single user; parameters persisted with ciphertext (O1) for smooth future upgrades.
 
 ## Dependency Audit Requirements

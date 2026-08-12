@@ -85,7 +85,7 @@ bun packages/cli/src/index.ts unlock
 ```
 
 4. **Sign** (MCP `signed_request_sign`, args `signed_request` + `unlock_token`):
-   double gate = platform endorsement verification + host approval; signs `action:intent_hash`
+   double gate = platform endorsement verification + host approval; signs the domain-separated request context (`wallet_address` / `platform_address` / `action` / `intent_hash` / `nonce` / `expires_at` / `user_id`)
 
 > Recovery-source guidance: `unlock`/`sign` print where the second factor should come from
 > (email share 3 / offline copy) based on local storage state — follow the hint.

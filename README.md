@@ -120,7 +120,7 @@ Sensitive credentials never appear in tool arguments — they travel via local t
 | `wallet_create` | `passphrase_token`, `email?`, `generate_mnemonic?` | returns `recovery_codes_file` / `mnemonic_file` paths (no plaintext to LLM); **rejects when a wallet already exists** (`WALLET_EXISTS`, no token consumed) — rebuild requires `wallet_wipe` (host approval) or CLI `init` interactive confirm |
 | `wallet_address` | — | current address |
 | `wallet_mnemonic_export` | — | approval-gated; writes 24-word mnemonic to local file, returns path only |
-| `signed_request_sign` | `signed_request`, `unlock_token` | double-gated (platform endorsement + user approval); signs `action:intent_hash` |
+| `signed_request_sign` | `signed_request`, `unlock_token` | double-gated (platform endorsement + user approval); signs domain-separated request context (`wallet_address` / `platform_address` / `action` / `intent_hash` / `nonce` / `expires_at` / `user_id`) |
 | `wallet_restore` | `recovery_file_path?` / `mnemonic_file_path?`, `passphrase_token`, `expected_address?`, `email?` | file paths must be inside the wallet dir |
 | `wallet_wipe` | `scope?` (`saved` default / `all`) | approval-gated; returns removed file list |
 
