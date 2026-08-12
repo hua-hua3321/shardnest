@@ -79,16 +79,19 @@ export function personalMessageHash(message: Uint8Array): Uint8Array {
 }
 
 /**
- * P1-6: 钱包侧签名消息（域分离 + 完整请求上下文绑定）。
- * 格式：`shardnest:signed_request:v1:<wallet_address>:<action>:<intent_hash>:<nonce>:<expires_at>`
- * - 绑定 wallet_address / nonce / expires_at / action / intent_hash——签名无法脱离
- *   原始请求单独传播（防跨请求复用）
+ * P1-6: 钱包侧签名消息（域分离 + 请求上下文绑定）。
+ * 格式：`shardnest:signed_request:v1:<wallet_address>:<platform_address>:<action>:<intent_hash>:<nonce>:<expires_at>:<user_id>`
+ * - 绑定 wallet_address / platform_address / action / intent_hash / nonce / expires_at / user_id——
+ *   签名无法脱离原始请求传播：防跨请求复用（nonce）、跨钱包（wallet_address）、
+ *   跨平台（platform_address）、跨用户（user_id）
  * - 域前缀 `shardnest:signed_request:v1:` 防与其他签名类型混淆（域分离）
  * - MCP 签名端与平台验签端必须调用同一函数，杜绝手工拼串漂移
+ * - 注：display 与 platform_signature 不进入签名——业务语义由 intent_hash 承诺（平台必须保证）；
+ *   背书验签由 verifySignedRequest 独立完成（与钱包签名互为双闸门）
  */
-export function walletSignMessage(req: Pick<SignedRequest, 'action' | 'intent_hash' | 'wallet_address' | 'nonce' | 'expires_at'>): Uint8Array {
+export function walletSignMessage(req: Pick<SignedRequest, 'action' | 'intent_hash' | 'wallet_address' | 'nonce' | 'expires_at' | 'user_id'> & { platform_address: string }): Uint8Array {
   return new TextEncoder().encode(
-    `shardnest:signed_request:v1:${req.wallet_address.toLowerCase()}:${req.action}:${req.intent_hash}:${req.nonce}:${req.expires_at}`,
+    `shardnest:signed_request:v1:${req.wallet_address.toLowerCase()}:${req.platform_address.toLowerCase()}:${req.action}:${req.intent_hash}:${req.nonce}:${req.expires_at}:${req.user_id}`,
   )
 }
 

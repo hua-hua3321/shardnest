@@ -63,12 +63,18 @@ async function writeFileAtomic(file: string, content: string, mode: number): Pro
 }
 
 /**
- * 多文件事务式提交（P0-2）：全部写入 staging + fsync 成功后才逐个 rename。
- * - 任一 staging 写失败 → 清理全部 staging，正式路径零接触（旧钱包完好）
- * - rename 阶段失败极罕见（同目录原子替换）；已切换文件为完整新内容，非半写状态
+ * 多文件事务式提交（P0-2 + 整组原子性修复）：
+ * 1. 全部写入 staging + fsync（任一失败 → 清理 staging，正式路径零接触）
+ * 2. 已存在的目标文件先 rename 到 .bak-<uuid>（备份；单个 rename 原子）
+ * 3. 逐个 rename staging → 正式（任一失败 → 回滚：备份恢复覆盖新文件 + 删除无备份的新文件）
+ *
+ * 之前实现只保证单文件原子：rename 中途失败会留下「新 metadata/device + 旧 recovery」
+ * 的混合钱包。备份使 rename 阶段失败可可靠回滚到旧状态。
  */
 async function commitAtomically(files: { file: string; content: string; mode: number }[]): Promise<void> {
   const tmps: { tmp: string; final: string }[] = []
+  const backups: { bak: string; final: string }[] = [] // 已存在目标文件的备份（rename 前收集）
+  let renamed = 0 // 已成功切换的 staging 数（回滚依据）
   try {
     for (const f of files) {
       await fs.mkdir(path.dirname(f.file), { recursive: true })
@@ -84,12 +90,34 @@ async function commitAtomically(files: { file: string; content: string; mode: nu
       }
       tmps.push({ tmp, final: f.file })
     }
+    // 备份已存在的目标文件（rename 原子；备份失败前目标未被触碰）
+    for (const t of tmps) {
+      try {
+        await fs.stat(t.final)
+      } catch {
+        continue // 目标不存在，无需备份
+      }
+      const bak = `${t.final}.bak-${randomUUID()}`
+      await fs.rename(t.final, bak)
+      backups.push({ bak, final: t.final })
+    }
+    // 逐个切换（rename 原子；失败进入回滚）
     for (const t of tmps) {
       await fs.rename(t.tmp, t.final)
       await fs.chmod(t.final, files.find((f) => f.file === t.final)!.mode).catch(() => {}) // 防已有宽松权限
+      renamed++
     }
   } catch (err) {
-    // 清理所有残留 staging（正式文件未被修改——事务未提交）
+    // 回滚：备份恢复（rename 覆盖新文件，原子恢复旧版本）
+    for (const b of backups) {
+      await fs.rename(b.bak, b.final).catch(() => {})
+    }
+    // 删除已切换但原本不存在的文件（无备份可恢复）
+    const restored = new Set(backups.map((b) => b.final))
+    for (let i = 0; i < renamed; i++) {
+      if (!restored.has(tmps[i].final)) await fs.rm(tmps[i].final, { force: true }).catch(() => {})
+    }
+    // 清理所有残留 staging
     for (const t of tmps) await fs.rm(t.tmp, { force: true }).catch(() => {})
     throw err
   }
@@ -198,13 +226,22 @@ export function decodeRecoveryCode(code: string): Share {
 }
 
 /**
- * P1-2: 校验一组分片属于同一批次（均带 setId 且一致；sn1 旧码无 setId 则跳过——
- * 无法校验，依赖地址交叉校验兜底）
+ * P1-2: 校验一组分片属于同一批次。
+ * 严格二选一（防 sn2+sn1 混用绕过批次校验）：
+ * - 含 sn2（带 setId）：全部必须带 setId 且一致——sn1/sn2 混合一律拒绝
+ * - 全 sn1（无 setId）：无法校验批次，依赖地址交叉校验兜底
  */
 function assertSameShareSet(shares: Share[]): void {
-  const setIds = shares.map((s) => s.setId).filter((id): id is string => id !== undefined)
-  if (setIds.length > 0 && new Set(setIds).size > 1) {
-    throw new Error('恢复码来自不同批次（可能混用了两个钱包的恢复码），操作已中止')
+  const withIds = shares.filter((s) => s.setId !== undefined)
+  const withoutIds = shares.filter((s) => s.setId === undefined)
+  if (withIds.length > 0 && withoutIds.length > 0) {
+    throw new Error('恢复码新旧格式混用（sn2 与 sn1）——无法确认同一批次，操作已中止')
+  }
+  if (withIds.length > 0) {
+    const setIds = new Set(withIds.map((s) => s.setId as string))
+    if (setIds.size > 1) {
+      throw new Error('恢复码来自不同批次（可能混用了两个钱包的恢复码），操作已中止')
+    }
   }
 }
 
@@ -501,15 +538,21 @@ export async function readRecoveryCodesFromFile(filePath?: string): Promise<stri
 }
 
 /** 方案 A：自动从恢复码文件读取第一片（CLI unlock/sign 免手输恢复码）。
- * 文件缺失/为空/无合法恢复码 → 返回 null，由调用方回退手动输入。
+ * 回退语义（P3）：仅「文件不存在（ENOENT）」与「无合法恢复码」视为可回退 → 返回 null；
+ * 其余错误（权限/路径是目录/I/O）直接抛出——静默吞错会掩盖配置/权限故障。
+ * 显式 --recovery-file 路径的任意读取错误一律直抛（用户明确指定了文件，必须知道结果）。
  * 安全语义：与手动输入该文件内容在威胁模型上等价（同用户权限恶意软件均可读），
  * 不改变双因素分离引导（emailed 状态提示仍保留）。 */
 export async function tryReadRecoveryCodeFromFile(filePath?: string): Promise<string | null> {
   try {
     const codes = await readRecoveryCodesFromFile(filePath)
     return codes[0] ?? null
-  } catch {
-    return null
+  } catch (err) {
+    if (filePath) throw err // 显式指定文件：任何错误都报告，不静默回退
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return null // 默认文件不存在 → 回退手动输入
+    if (err instanceof Error && err.message === '恢复码文件为空') return null // 空文件 → 回退手动输入
+    throw err // 权限错误/路径是目录/其他 I/O 错误 → 暴露给用户（配置问题应被看见）
   }
 }
 

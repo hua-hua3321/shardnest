@@ -299,11 +299,17 @@ describe('shardnest MCP 薄壳', () => {
     expect(out.address).toBe(created.address)
     // 5. 验签还原同一地址（平台侧可验证；P1-6: 用 walletSignMessage 重建签名消息）
     const sig = Uint8Array.from(Buffer.from(out.signature, 'hex'))
-    const recovered = recoverSigner(walletSignMessage(req), sig)
+    const recovered = recoverSigner(walletSignMessage({ ...req, platform_address: platformAddr }), sig)
     expect(recovered.toLowerCase()).toBe(created.address.toLowerCase())
     // P1-6: 签名绑定 nonce——改用不同 nonce 验签必然还原不同地址（防跨请求复用）
-    const otherNonce = recoverSigner(walletSignMessage({ ...req, nonce: 'other-nonce-1234567890' }), sig)
+    const otherNonce = recoverSigner(walletSignMessage({ ...req, nonce: 'other-nonce-1234567890', platform_address: platformAddr }), sig)
     expect(otherNonce.toLowerCase()).not.toBe(created.address.toLowerCase())
+    // P1-6: 签名绑定平台身份——不同平台地址验签还原不同签名者（防跨平台复用）
+    const otherPlatform = recoverSigner(walletSignMessage({ ...req, platform_address: '0x1111111111111111111111111111111111111111' }), sig)
+    expect(otherPlatform.toLowerCase()).not.toBe(created.address.toLowerCase())
+    // P1-6: 签名绑定 user_id——不同用户验签还原不同签名者（防跨用户复用）
+    const otherUser = recoverSigner(walletSignMessage({ ...req, user_id: 'user-99', platform_address: platformAddr }), sig)
+    expect(otherUser.toLowerCase()).not.toBe(created.address.toLowerCase())
   })
 
   it('wallet_address 与本地不一致 → WALLET_ADDRESS_MISMATCH 拒绝（纵深防御）', async () => {

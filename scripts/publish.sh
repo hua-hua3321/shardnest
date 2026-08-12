@@ -6,10 +6,20 @@ cd "$(dirname "$0")/.."
 
 DRY="${1:-}"
 PACKAGES=(core signer verify-sdk protocol cli mcp-server)
-declare -A VERSIONS=(
-  [core]="0.1.0" [signer]="0.2.0" [cli]="0.2.0"
-  [mcp-server]="0.3.0" [protocol]="0.3.0" [verify-sdk]="0.3.0"
-)
+
+# 版本号映射（Bash 3.2 兼容：macOS 默认 Bash 3.2 不支持 declare -A 关联数组，
+# 用普通函数 + case 替代）
+version_of() {
+  case "$1" in
+    core) echo "0.1.0" ;;
+    signer) echo "0.2.0" ;;
+    cli) echo "0.2.0" ;;
+    mcp-server) echo "0.3.0" ;;
+    protocol) echo "0.3.0" ;;
+    verify-sdk) echo "0.3.0" ;;
+    *) echo "0.0.0" ;;
+  esac
+}
 
 # ── 备份原始 package.json（发布后还原，保留 workspace:* 供本地开发）──
 BACKUP_DIR="$(mktemp -d)"
@@ -44,7 +54,7 @@ done
 
 # ── 逐包发布（prepublishOnly 自动构建）──
 for p in "${PACKAGES[@]}"; do
-  echo "=== @wallet-service/$p@${VERSIONS[$p]} ==="
+  echo "=== @wallet-service/$p@$(version_of "$p") ==="
   (cd "packages/$p" && npm publish --access public --registry https://registry.npmjs.org ${DRY:+--dry-run})
 done
 echo "全部发布完成 ✅"

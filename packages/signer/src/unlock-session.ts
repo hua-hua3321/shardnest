@@ -20,6 +20,9 @@ import { randomBytes, bytesToHex } from '@noble/hashes/utils'
 
 export const UNLOCK_TTL_MS = 5 * 60 * 1000 // 5 分钟
 
+/** purpose 的 AAD 域前缀（防 AAD 混淆；仅 v:3 会话使用） */
+const SESSION_AAD_PREFIX = 'shardnest:session:v1:'
+
 export function getUnlockDir(): string {
   // I19: 空串回退（与 commands.getHomeDir 一致）
   const home = process.env.SHARDNEST_HOME?.trim()
@@ -71,13 +74,16 @@ function sessionPrefix(type: SessionType): string {
  * 创建会话：敏感材料用 token 派生 KEK 加密落盘（0600），返回 token。
  * @param material 敏感字节（私钥或口令编码；调用方负责清零）
  * @param type 会话类型（决定文件前缀，隔离语义）
- * @param purpose P1-7: 口令会话绑定的操作（写入会话文件，消费时校验）
+ * @param purpose P1-7: 口令会话绑定的操作（写入会话文件；v:3 起同时作为 GCM AAD，
+ *  篡改 purpose 字段会导致解密认证失败——密文外元数据被认证）
  */
 export async function createUnlockSession(material: Uint8Array, type: SessionType = 'unlock', purpose?: PassphrasePurpose): Promise<string> {
   const token = bytesToHex(randomBytes(32))
   const kek = sha256(new TextEncoder().encode(token))
   const nonce = randomBytes(12)
-  const cipher = gcm(kek, nonce)
+  // v:3: purpose 作为 GCM AAD（域分离前缀）——密文外 JSON 字段被篡改时解密失败
+  const aad = purpose ? new TextEncoder().encode(`${SESSION_AAD_PREFIX}${purpose}`) : undefined
+  const cipher = gcm(kek, nonce, aad)
   const ct = cipher.encrypt(material)
   const dir = getUnlockDir()
   await fs.mkdir(dir, { recursive: true })
@@ -85,7 +91,7 @@ export async function createUnlockSession(material: Uint8Array, type: SessionTyp
   const file = path.join(dir, `${sessionPrefix(type)}-${token.slice(0, 16)}.bin`) // 8 字节熵前缀，防本地枚举
   await fs.writeFile(
     file,
-    JSON.stringify({ v: 2, purpose: purpose ?? null, nonce: Buffer.from(nonce).toString('base64'), ct: Buffer.from(ct).toString('base64') }),
+    JSON.stringify({ v: 3, purpose: purpose ?? null, nonce: Buffer.from(nonce).toString('base64'), ct: Buffer.from(ct).toString('base64') }),
     { mode: 0o600 },
   )
   return token
@@ -123,13 +129,21 @@ export async function consumeUnlockSession(token: string, type: SessionType = 'u
       throw new Error('解锁会话已过期，请重新 unlock')
     }
     const data = JSON.parse(await fs.readFile(consuming, 'utf8')) as { v?: number; purpose?: PassphrasePurpose | null; nonce: string; ct: string }
-    // P1-7: 操作绑定校验——令牌用途与本次操作不一致即拒绝（防 create 令牌用于 restore 等）
-    if (purpose && data.purpose !== undefined && data.purpose !== null && data.purpose !== purpose) {
-      throw new Error(`口令令牌用途不匹配（令牌为 ${data.purpose}，本次操作为 ${purpose}）`)
+    // P1-7: 操作绑定校验——令牌用途与本次操作不一致即拒绝
+    // （v:2 起不再放行 null/undefined：篡改 purpose 为 null 绕过用途绑定的攻击面已关闭；
+    // v:3 的 purpose 同时被 GCM AAD 认证，篡改为其他值同样解密失败）
+    if (purpose && data.purpose !== purpose) {
+      throw new Error(`口令令牌用途不匹配（令牌为 ${data.purpose ?? '未指定'}，本次操作为 ${purpose}）`)
     }
     const kek = sha256(new TextEncoder().encode(token))
     const nonce = Uint8Array.from(Buffer.from(data.nonce, 'base64'))
     const ct = Uint8Array.from(Buffer.from(data.ct, 'base64'))
+    if (data.v === 3) {
+      // v:3: purpose 作为 AAD 解密——密文外 purpose 被篡改（含改为 null）→ 认证失败
+      const aad = data.purpose ? new TextEncoder().encode(`${SESSION_AAD_PREFIX}${data.purpose}`) : undefined
+      return gcm(kek, nonce, aad).decrypt(ct)
+    }
+    // v:2 及更早：无 AAD（历史格式；新写入一律 v:3）
     return gcm(kek, nonce).decrypt(ct)
   } finally {
     await fs.rm(consuming, { force: true })

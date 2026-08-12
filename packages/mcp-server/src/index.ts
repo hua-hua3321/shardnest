@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * shardnest MCP 薄壳（无密钥）
+ * shardnest MCP 薄壳（凭证不进 LLM；独立无密钥进程为路线图 P0-3）
  *
  * 架构：MCP 层只做「验平台背书 → 确认 → 转发签名守护」，
  * 私钥仅在签名瞬间于内存中重组并立即清零（复用 cli 的加密存储）。
@@ -254,11 +254,11 @@ export function createShardnestServer(
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'UNLOCK_INVALID', message: (err as Error).message }) }] }
       }
       try {
-        // P1-6: 签名内容 = 域分离 + 完整请求上下文绑定（wallet_address/nonce/expires_at/action/intent_hash），
-        // 与 verify-sdk 平台侧验证共用 walletSignMessage（protocol 包统一构造）
+        // P1-6: 签名内容 = 域分离 + 请求上下文绑定（wallet_address/platform_address/
+        // action/intent_hash/nonce/expires_at/user_id），与平台验签端共用 walletSignMessage
         const vault = new WalletVault()
         vault.unlockPrivateKey(privateKey)
-        const sig = vault.signMessage(walletSignMessage(req))
+        const sig = vault.signMessage(walletSignMessage({ ...req, platform_address: platformAddress }))
         const address = vault.getAddress()
         vault.wipe()
         return { content: [{ type: 'text' as const, text: JSON.stringify({ address, signature: Buffer.from(sig).toString('hex') }) }] }
@@ -328,8 +328,15 @@ export function createShardnestServer(
   return server
 }
 
-// stdio 启动（直接运行 bin 时）
-if (process.argv[1]?.endsWith('mcp-server/src/index.ts')) {
-  const server = createShardnestServer()
-  await server.connect(new StdioServerTransport())
+// stdio 启动（直接运行本文件时——兼容源码 src/index.ts、构建产物 dist/index.js
+// 及 npm 安装后的任意路径；被测试/其他模块 import 时 argv[1] 是调用方，不启动）
+if (process.argv[1]) {
+  const { realpath } = await import('node:fs/promises')
+  const { fileURLToPath } = await import('node:url')
+  const self = await realpath(fileURLToPath(import.meta.url))
+  const entry = await realpath(process.argv[1]).catch(() => process.argv[1] as string)
+  if (entry === self) {
+    const server = createShardnestServer()
+    await server.connect(new StdioServerTransport())
+  }
 }

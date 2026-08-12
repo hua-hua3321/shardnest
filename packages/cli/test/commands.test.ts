@@ -423,6 +423,53 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     expect(names.some((n) => n.includes('.tmp-'))).toBe(false)
   })
 
+  it('P1 整组原子性：rename 中途失败 → 旧钱包完整回滚（无「新 meta/device + 旧 recovery」混合钱包）', async () => {
+    // 先建旧钱包（meta/device/recovery 三文件都存在）
+    const ok = await initWallet(PASSPHRASE)
+    expect(ok.recoveryFile).toBeTruthy()
+    const oldMeta = await fs.readFile(path.join(getHomeDir(), 'metadata.json'), 'utf8')
+    const oldDevice = await fs.readFile(path.join(getHomeDir(), 'device-share.json'), 'utf8')
+    const oldRecovery = await fs.readFile(path.join(getHomeDir(), 'recovery-codes.txt'), 'utf8')
+
+    // 模拟切换阶段 rename 失败：staging → recovery-codes.txt 的 rename 抛错
+    // （备份阶段 recovery → .bak-* 的 rename 不匹配拦截条件，正常放行）
+    const realRename = fs.rename.bind(fs)
+    fs.rename = (async (from: string | URL, to: string | URL) => {
+      if (String(from).includes('.tmp-') && String(to).includes('recovery-codes.txt')) {
+        throw new Error('rename failed (simulated)')
+      }
+      return (realRename as (f: string | URL, t: string | URL) => Promise<void>)(from, to)
+    }) as typeof fs.rename
+    try {
+      // force 覆盖旧钱包：meta/device 已切换、recovery 切换失败 → 必须整体回滚
+      await expect(initWallet('another-passphrase-456!', undefined, true, true)).rejects.toThrow('rename failed')
+    } finally {
+      fs.rename = realRename
+    }
+    // 整组回滚断言：三文件全部保持旧内容（不允许部分切换）
+    expect(await fs.readFile(path.join(getHomeDir(), 'metadata.json'), 'utf8')).toBe(oldMeta)
+    expect(await fs.readFile(path.join(getHomeDir(), 'device-share.json'), 'utf8')).toBe(oldDevice)
+    expect(await fs.readFile(path.join(getHomeDir(), 'recovery-codes.txt'), 'utf8')).toBe(oldRecovery)
+    // 无 .tmp- / .bak- 残留
+    const names = await fs.readdir(getHomeDir())
+    expect(names.some((n) => n.includes('.tmp-') || n.includes('.bak-'))).toBe(false)
+  })
+
+  it('P1-2 严格批次：sn2 与 sn1 混用 → 拒绝（防绕过批次校验恢复出第三个钱包）', async () => {
+    const s1 = { index: 1, bytes: new Uint8Array([1, 2, 3, 4]) }
+    const s2 = { index: 2, bytes: new Uint8Array([5, 6, 7, 8]) }
+    const sn1Code = encodeRecoveryCode(s1) // 旧格式，无批次 ID
+    const sn2Code = encodeRecoveryCode(s2, 'a'.repeat(16)) // 新格式，带批次 ID
+    // 双恢复码导出路径
+    await expect(exportMnemonicFromCodes(sn1Code, sn2Code)).rejects.toThrow(/新旧格式混用/)
+    // restore 路径同样拒绝
+    await expect(restoreWallet(PASSPHRASE, [sn1Code, sn2Code])).rejects.toThrow(/新旧格式混用/)
+  })
+
+  it('P3 显式 --recovery-file 路径错误 → 直接抛错（不静默回退手动输入）', async () => {
+    await expect(tryReadRecoveryCodeFromFile(path.join(TEST_HOME, 'no-such-codes.txt'))).rejects.toThrow()
+  })
+
   it('P1-3：损坏 metadata → initWallet 硬失败（不视为"无钱包"绕过防覆盖）', async () => {
     await initWallet(PASSPHRASE)
     // 篡改 metadata 为损坏 JSON → readOldAddress 重抛（非 ENOENT），initWallet 拒绝
