@@ -7,10 +7,9 @@ cd "$(dirname "$0")/.."
 DRY="${1:-}"
 PACKAGES=(core signer verify-sdk protocol cli mcp-server)
 
-# 版本号映射（Bash 3.2 兼容：macOS 默认 Bash 3.2 不支持 declare -A 关联数组，
-# 用普通函数 + case 替代）
+# 版本号从 package.json 动态读取（零硬编码）
 version_of() {
-  echo "0.3.1"
+  node -e "console.log(require('./packages/$1/package.json').version)"
 }
 
 # ── 备份原始 package.json（发布后还原，保留 workspace:* 供本地开发）──
@@ -18,15 +17,21 @@ BACKUP_DIR="$(mktemp -d)"
 for p in "${PACKAGES[@]}"; do cp "packages/$p/package.json" "$BACKUP_DIR/$p.json"; done
 trap 'for p in "${PACKAGES[@]}"; do cp "$BACKUP_DIR/$p.json" "packages/$p/package.json"; done; echo "package.json 已还原"' EXIT
 
-# ── workspace:* → 版本号 ──
+# ── workspace:* → 版本号（从各包 package.json 动态读取）──
 for p in "${PACKAGES[@]}"; do
   python3 - "$p" << 'PY'
-import json, sys
+import json, sys, os
 name = sys.argv[1]
-mapping = {'core':'0.1.0','signer':'0.2.0','cli':'0.2.0','mcp-server':'0.3.0','protocol':'0.3.0','verify-sdk':'0.3.0'}
 pkg_path = f'packages/{name}/package.json'
 with open(pkg_path) as f:
     pkg = json.load(f)
+# 动态构建版本映射：从各包 package.json 读取当前 version
+mapping = {}
+for d in os.listdir('packages'):
+    p = os.path.join('packages', d, 'package.json')
+    if os.path.isfile(p):
+        with open(p) as f:
+            mapping[json.load(f)['name'].replace('@wallet-services/', '')] = json.load(open(p))['version']
 for dep_type in ('dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'):
     deps = pkg.get(dep_type) or {}
     for k in list(deps):
