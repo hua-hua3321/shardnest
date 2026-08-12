@@ -470,6 +470,26 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     await expect(tryReadRecoveryCodeFromFile(path.join(TEST_HOME, 'no-such-codes.txt'))).rejects.toThrow()
   })
 
+  it('P1 成功覆盖后无 .bak-* 残留（旧明文备份已安全删除）', async () => {
+    await initWallet(PASSPHRASE, undefined, true)
+    // force 覆盖（含助记词）——成功路径必须清除旧材料备份
+    await initWallet('another-passphrase-456!', undefined, true, true)
+    const names = await fs.readdir(getHomeDir())
+    expect(names.some((n) => n.includes('.bak-'))).toBe(false)
+    expect(names.some((n) => n.includes('.tmp-'))).toBe(false)
+  })
+
+  it('P1 wipe all 枚举清理 .bak-* 敏感残留（防历史遗留旧明文仍可读）', async () => {
+    await initWallet(PASSPHRASE, undefined, true)
+    // 模拟历史版本/异常中断遗留的旧材料备份（.bak-<uuid> 受控命名）
+    await fs.writeFile(path.join(getHomeDir(), 'recovery-codes.txt.bak-deadbeef-0000-0000-0000-000000000000'), 'sn1-1-aa11bb22-00000000\n', { mode: 0o600 })
+    await fs.writeFile(path.join(getHomeDir(), 'mnemonic.txt.bak-deadbeef-0000-0000-0000-000000000001'), 'legacy 24 words\n', { mode: 0o600 })
+    const { removed } = await wipeWallet(WIPE_CONFIRM_PHRASE, 'all')
+    expect(removed.some((n) => n.includes('.bak-'))).toBe(true)
+    const names = await fs.readdir(getHomeDir()).catch(() => [] as string[])
+    expect(names.filter((n) => !n.startsWith('unlock'))).toEqual([])
+  })
+
   it('P1-3：损坏 metadata → initWallet 硬失败（不视为"无钱包"绕过防覆盖）', async () => {
     await initWallet(PASSPHRASE)
     // 篡改 metadata 为损坏 JSON → readOldAddress 重抛（非 ENOENT），initWallet 拒绝

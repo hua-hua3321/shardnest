@@ -121,6 +121,15 @@ async function commitAtomically(files: { file: string; content: string; mode: nu
     for (const t of tmps) await fs.rm(t.tmp, { force: true }).catch(() => {})
     throw err
   }
+  // 成功路径：安全删除旧备份（覆写 3 遍——旧材料含明文恢复码/助记词，禁止普通 rm）。
+  // 事务已提交，此处失败不回滚（会破坏新状态），而是抛错提示残留路径供用户处理
+  for (const b of backups) {
+    try {
+      await secureDelete(b.bak)
+    } catch (err) {
+      throw new Error(`钱包已更新，但旧材料备份 ${path.basename(b.bak)} 删除失败，请手动安全删除（覆写后移除）：${(err as Error).message}`)
+    }
+  }
 }
 
 /** 助记词内容构造（与落盘分离，供事务式提交） */
@@ -693,11 +702,15 @@ export async function listSavedFiles(): Promise<string[]> {
   return names
 }
 
+/** 受控残留命名模式：事务备份 `.bak-<uuid>` 与 staging `.tmp-<uuid>`（防枚举到无关文件） */
+const RESIDUAL_PATTERN = /\.(bak|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
 /**
  * 彻底删除（不可恢复，覆写 3 遍 + unlink）：
  * - scope='saved'：仅删'需用户保存'的明文备份（recovery-codes.txt / mnemonic.txt）——
  *   本机不再有可被窃取的明文恢复码/助记词；钱包本体（设备片）保留，口令解锁继续可用
  * - scope='all'：删除本机全部密钥材料（device-share / recovery / mnemonic / metadata / unlock 会话）
+ * - 两档均枚举删除受控残留（.bak-* 旧材料备份 / .tmp-* staging）——防「wipe 后旧明文仍可读」
  * - 执行前必须输入确认短语 WIPE_CONFIRM_PHRASE（防误删）
  * - ⚠️ 调用前必须提醒用户：确认已保存恢复码/助记词（用户保存的那一份是唯一恢复途径）
  * @returns removed 为 basename 清单（展示用）
@@ -718,6 +731,18 @@ export async function wipeWallet(confirmPhrase: string, scope: WipeScope = 'all'
     } catch {
       // 不存在则跳过
     }
+  }
+  // 枚举受控残留：.bak-* 旧材料备份（含明文恢复码/助记词旧版）+ .tmp-* staging——两档均清理
+  try {
+    const names = await fs.readdir(getHomeDir())
+    for (const n of names) {
+      if (RESIDUAL_PATTERN.test(n)) {
+        await secureDelete(path.join(getHomeDir(), n))
+        removed.push(n)
+      }
+    }
+  } catch {
+    // 目录不存在等——无需清理
   }
   if (scope === 'all') {
     // unlock/ 目录（令牌会话）
