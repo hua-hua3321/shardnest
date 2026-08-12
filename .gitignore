@@ -11,3 +11,6 @@ dist/
 
 # IDE 自动生成的 repowiki 缓存（不入库）
 .qoder/
+
+# IDE 自动生成的 .mimosa 目录（不入库）
+.mimosa/
