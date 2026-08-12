@@ -72,7 +72,7 @@ All commands are interactive (passphrases & recovery codes are masked input).
 | `restore` | Recover from 2 recovery codes | new masked passphrase → 2 masked recovery codes → expected address (optional, strongly recommended) → email (optional) |
 | `restore-mnemonic` | Recover from 24-word mnemonic alone | new masked passphrase → 24 words → expected address (optional) → email (optional) |
 | `mnemonic-export` | Export 24-word mnemonic from any 2 shares | mode a) device share + recovery code, or b) two recovery codes → writes `mnemonic.txt` |
-| `wipe` | Permanently delete (irreversible) | choose scope: 1) saved files only, 2) everything → file list → confirm phrase `PERMANENT DELETE` |
+| `wipe` | Best-effort secure erase (3× overwrite then delete; physical erasure not guaranteed on SSD/CoW filesystems) | choose scope: 1) saved files only, 2) everything → file list → confirm phrase `PERMANENT DELETE` |
 
 ### Mnemonic (optional, default off)
 
@@ -102,7 +102,7 @@ Backup distribution after init:
 | 1) saved (default/recommended) | recovery codes + mnemonic (plaintext backups) | still usable (passphrase unlock) |
 | 2) all | device share + backups + metadata + token sessions | must rebuild from saved codes/mnemonic |
 
-Both scopes overwrite files 3× with random data before unlink (irreversible) and require the confirm phrase `PERMANENT DELETE`.
+Both scopes overwrite files 3× with random data before unlink (best-effort secure erase — app-layer cannot guarantee physical erasure on SSD, APFS/CoW or snapshot environments; deletion failures are reported, never masked as success) and require the confirm phrase `PERMANENT DELETE`.
 
 ## MCP tools
 
