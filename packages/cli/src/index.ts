@@ -9,7 +9,7 @@
  *   shardnest restore     # 输入 2 个恢复码恢复（新设备/口令丢失）
  */
 import * as readline from 'node:readline'
-import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getRecoveryFileStatus, tryReadRecoveryCodeFromFile } from './commands'
+import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getRecoveryFileStatus, tryReadRecoveryCodeFromFile, validatePassphrase } from './commands'
 import { createPassphraseSession } from '@wallet-services/signer'
 import { t } from './i18n'
 
@@ -103,7 +103,7 @@ async function main() {
     case 'passphrase-token': {
       // 本地输入口令 → 生成短期单次口令令牌（MCP wallet_create/restore 用，口令不进 LLM）
       const passphrase = await promptSecret(t('口令（>=12 位）: ', "Passphrase (>=12 chars): "))
-      if (passphrase.length < 12) throw new Error(t('口令至少 12 位', "Passphrase must be at least 12 chars"))
+      validatePassphrase(passphrase)
       // P1-7: 令牌绑定操作用途——create 令牌只能用于 wallet_create，restore 令牌只能用于 wallet_restore
       console.log(t('令牌用途：', 'Token purpose:'))
       console.log(t('  [c] 创建钱包（wallet_create）', '  [c] Create wallet (wallet_create)'))

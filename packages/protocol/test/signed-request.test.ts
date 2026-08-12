@@ -23,10 +23,11 @@ function makeOptions(overrides: Partial<Parameters<typeof issueSignedRequest>[0]
   }
 }
 
-describe('walletSignMessage v2：length-prefixed 无字段边界碰撞', () => {
+describe('walletSignMessage v3：length-prefixed 无字段边界碰撞 + display 所见即所签', () => {
   const base = {
     action: 'withdraw_confirm' as const,
     intent_hash: '0x' + 'cd'.repeat(32),
+    display: '向 0x0000 提现 50 USDC',
     wallet_address: '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf',
     platform_address: platformAddr,
     nonce: 'nonce-abcdefghij',
@@ -56,6 +57,8 @@ describe('walletSignMessage v2：length-prefixed 无字段边界碰撞', () => {
     expect(Buffer.from(walletSignMessage({ ...base, platform_address: otherAddr })).toString('hex')).not.toBe(ref)
     expect(Buffer.from(walletSignMessage({ ...base, wallet_address: '0x0000000000000000000000000000000000000000' })).toString('hex')).not.toBe(ref)
     expect(Buffer.from(walletSignMessage({ ...base, action: 'sign_message' as const })).toString('hex')).not.toBe(ref)
+    // P1-1: display 纳入签名——改变 display 必然改变消息（所见即所签）
+    expect(Buffer.from(walletSignMessage({ ...base, display: '其他操作' })).toString('hex')).not.toBe(ref)
   })
 })
 

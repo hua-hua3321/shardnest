@@ -79,19 +79,19 @@ export function personalMessageHash(message: Uint8Array): Uint8Array {
 }
 
 /**
- * P1-6: 钱包侧签名消息（域分离 + 请求上下文绑定）。
- * 格式 v2：length-prefixed 确定性二进制（消除冒号拼接的字段边界歧义）：
- *   `shardnest:signed_request:v2:` (16B) | wallet_address(lp) | platform_address(lp)
- *   | action(lp) | intent_hash(lp 32B) | nonce(lp) | expires_at(8B BE) | user_id(lp)
- * - 绑定 wallet_address / platform_address / action / intent_hash / nonce / expires_at / user_id——
+ * 钱包侧签名消息（域分离 + 请求上下文绑定 + 所见即所签）。
+ * 格式 v3：length-prefixed 确定性二进制（消除冒号拼接的字段边界歧义）：
+ *   `shardnest:signed_request:v3:` | wallet_address(lp) | platform_address(lp)
+ *   | action(lp) | intent_hash(lp 32B) | display(lp) | nonce(lp) | expires_at(8B BE) | user_id(lp)
+ * - 绑定 wallet_address / platform_address / action / intent_hash / display / nonce / expires_at / user_id——
  *   签名无法脱离原始请求传播：防跨请求复用（nonce）、跨钱包（wallet_address）、
  *   跨平台（platform_address）、跨用户（user_id）
+ * - P1-1: display 纳入签名——所见即所签（平台显示内容与签名绑定，防偷换）
  * - 4 字节大端长度前缀 + UTF-8 字节——nonce/user_id 含冒号或任意字符均无歧义
  * - MCP 签名端与平台验签端必须调用同一函数，杜绝手工拼串漂移
- * - 注：display 与 platform_signature 不进入签名——业务语义由 intent_hash 承诺（平台必须保证）；
- *   背书验签由 verifySignedRequest 独立完成（与钱包签名互为双闸门）
+ * - 注：platform_signature 不进入钱包签名——背书验签由 verifySignedRequest 独立完成（双闸门）
  */
-export function walletSignMessage(req: Pick<SignedRequest, 'action' | 'intent_hash' | 'wallet_address' | 'nonce' | 'expires_at' | 'user_id'> & { platform_address: string }): Uint8Array {
+export function walletSignMessage(req: Pick<SignedRequest, 'action' | 'intent_hash' | 'display' | 'wallet_address' | 'nonce' | 'expires_at' | 'user_id'> & { platform_address: string }): Uint8Array {
   const enc = new TextEncoder()
   const lp = (s: string): Uint8Array => {
     const data = enc.encode(s)
@@ -101,11 +101,12 @@ export function walletSignMessage(req: Pick<SignedRequest, 'action' | 'intent_ha
     return out
   }
   const parts: Uint8Array[] = [
-    enc.encode('shardnest:signed_request:v2:'), // 域分离前缀（与背书签名 v1 区分）
+    enc.encode('shardnest:signed_request:v3:'), // 域分离前缀（v3: display 纳入签名）
     lp(req.wallet_address.toLowerCase()),
     lp(req.platform_address.toLowerCase()),
     lp(req.action),
     lp(req.intent_hash),
+    lp(req.display),
     lp(req.nonce),
     lp(req.expires_at.toString()),
     lp(req.user_id),

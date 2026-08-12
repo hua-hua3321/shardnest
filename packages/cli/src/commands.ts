@@ -317,10 +317,37 @@ async function decryptShare(enc: { data: string; salt: string; kdf?: KdfParams }
   }
 }
 
-/** 口令强度校验（≥12 位，防弱口令爆破设备分片） */
+/** 口令强度校验（≥12 位 + 至少 2 种字符类 + 反模式检测，防弱口令爆破设备分片） */
 export function validatePassphrase(passphrase: string): void {
   if (passphrase.length < 12) {
     throw new Error('口令至少 12 位（建议混合大小写/数字/符号）')
+  }
+  // 字符类计数（小写/大写/数字/符号）
+  let classes = 0
+  if (/[a-z]/.test(passphrase)) classes++
+  if (/[A-Z]/.test(passphrase)) classes++
+  if (/[0-9]/.test(passphrase)) classes++
+  if (/[^a-zA-Z0-9]/.test(passphrase)) classes++
+  if (classes < 2) {
+    throw new Error('口令至少包含 2 种字符类型（小写/大写/数字/符号）')
+  }
+  // 反模式检测：全相同字符
+  if (/^(.)\1+$/.test(passphrase)) {
+    throw new Error('口令不能为重复字符')
+  }
+  // 反模式检测：连续键盘序列（qwerty/asdf/1234/abcd 等 ≥4 位）
+  const sequences = [
+    'qwertyuiop', 'asdfghjkl', 'zxcvbnm',
+    '1234567890', 'abcdefghijklmnopqrstuvwxyz',
+  ]
+  const lower = passphrase.toLowerCase()
+  for (const seq of sequences) {
+    for (let i = 0; i <= seq.length - 4; i++) {
+      const sub = seq.slice(i, i + 4)
+      if (lower.includes(sub) || lower.includes(sub.split('').reverse().join(''))) {
+        throw new Error('口令不能包含连续键盘或字母序列（≥4 位）')
+      }
+    }
   }
 }
 
