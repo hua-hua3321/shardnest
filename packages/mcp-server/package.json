@@ -1,11 +1,14 @@
 {
   "name": "@wallet-services/mcp-server",
-  "version": "0.3.1",
+  "version": "0.3.2",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hua-hua3321/shardnest.git"
+  },
+  "homepage": "https://github.com/hua-hua3321/shardnest",
   "type": "module",
   "main": "dist/index.js",
-  "bin": {
-    "shardnest-mcp": "dist/index.js"
-  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepublishOnly": "bun run build",
@@ -23,5 +26,8 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist"
-  ]
+  ],
+  "bin": {
+    "shardnest-mcp": "dist/index.js"
+  }
 }
