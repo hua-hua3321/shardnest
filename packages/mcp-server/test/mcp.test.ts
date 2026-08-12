@@ -84,6 +84,7 @@ describe('shardnest MCP 薄壳', () => {
     const res = await client.callTool({ name: 'wallet_wipe', arguments: { scope: 'all' } })
     const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('USER_REJECTED')
+    expect(res.isError).toBe(true)
     // 钱包未被删除（地址仍可读）
     const addrRes = await client.callTool({ name: 'wallet_address', arguments: {} })
     expect(((addrRes.content as unknown[])[0] as { text: string }).text).toBe(created.address)
@@ -94,6 +95,7 @@ describe('shardnest MCP 薄壳', () => {
     const res = await client.callTool({ name: 'wallet_wipe', arguments: {} })
     const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('USER_REJECTED')
+    expect(res.isError).toBe(true)
   })
 
   it('wallet_wipe：宿主放行 + 默认 scope=saved → 仅删明文备份，钱包保留', async () => {
@@ -192,6 +194,7 @@ describe('shardnest MCP 薄壳', () => {
     const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('RESTORE_FAILED')
     expect(out.message).toMatch(/钱包目录|逃逸/)
+    expect(res.isError).toBe(true)
   })
 
   it('wallet_mnemonic_export：用户拒绝确认 → USER_REJECTED（私钥提取闸门）', async () => {
@@ -199,6 +202,7 @@ describe('shardnest MCP 薄壳', () => {
     const res = await client.callTool({ name: 'wallet_mnemonic_export', arguments: {} })
     const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('USER_REJECTED')
+    expect(res.isError).toBe(true)
   })
 
   it('wallet_restore：恢复码经本地文件读取 → 新恢复码只返回文件路径（凭证隔离）', async () => {
@@ -239,6 +243,7 @@ describe('shardnest MCP 薄壳', () => {
     const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('RESTORE_FAILED')
     expect(out.message).toMatch(/用途不匹配/)
+    expect(res.isError).toBe(true)
     // restore 令牌用于 restore → 成功
     const okRes = await client.callTool({
       name: 'wallet_restore',
@@ -263,6 +268,7 @@ describe('shardnest MCP 薄壳', () => {
     })
     const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('RESTORE_FAILED')
+    expect(res.isError).toBe(true)
   })
 
   it('wallet_create 无效口令令牌 → 错误（口令令牌单次/过期防护）', async () => {
@@ -331,6 +337,7 @@ describe('shardnest MCP 薄壳', () => {
     })
     const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('WALLET_ADDRESS_MISMATCH')
+    expect(res.isError).toBe(true)
   })
 
   it('无效解锁令牌 → UNLOCK_INVALID（单次使用 + 过期防护）', async () => {
@@ -351,6 +358,7 @@ describe('shardnest MCP 薄壳', () => {
     })
     const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('UNLOCK_INVALID')
+    expect(res.isError).toBe(true)
   })
 
   it('伪造背书（非平台签发）→ BAD_SIGNATURE 拒绝', async () => {
@@ -373,6 +381,7 @@ describe('shardnest MCP 薄壳', () => {
     })
     const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('BAD_SIGNATURE')
+    expect(res.isError).toBe(true)
   })
 
   it('用户拒绝确认 → USER_REJECTED', async () => {
@@ -394,5 +403,6 @@ describe('shardnest MCP 薄壳', () => {
     })
     const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('USER_REJECTED')
+    expect(res.isError).toBe(true)
   })
 })

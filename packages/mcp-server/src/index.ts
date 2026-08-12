@@ -20,6 +20,11 @@ import {defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession
 
 export const PLATFORM_ADDRESS = process.env.SHARDNEST_PLATFORM_ADDRESS ?? ''
 
+/** 错误响应：isError=true 确保 LLM/客户端不会将安全拒绝误判为成功 */
+function errResp(obj: Record<string, unknown>) {
+  return { content: [{ type: 'text' as const, text: JSON.stringify(obj) }], isError: true }
+}
+
 /** 路径约束：文件路径必须在钱包目录内（防穿越/符号链接逃逸到任意文件） */
 async function assertSafePath(userPath: string): Promise<string> {
   const home = path.resolve(getHomeDir())
@@ -64,16 +69,11 @@ export function createShardnestServer(
       // I11: 存在性检查前置——钱包已存在时不消费口令令牌（避免用户重新生成令牌）
       const existing = await getAddress().catch(() => null)
       if (existing) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              error: 'WALLET_EXISTS',
-              address: existing,
-              message: '钱包已存在；如需重建请先 wallet_wipe（需宿主 approval 确认），或用 CLI init 交互确认',
-            }),
-          }],
-        }
+        return errResp({
+          error: 'WALLET_EXISTS',
+          address: existing,
+          message: '钱包已存在；如需重建请先 wallet_wipe（需宿主 approval 确认），或用 CLI init 交互确认',
+        })
       }
       // 口令经本地口令令牌消费（CLI passphrase-token 生成；口令明文不进 LLM）
       // P1-7: 口令令牌绑定操作——create 令牌只能用于建钱包
@@ -115,14 +115,14 @@ export function createShardnestServer(
         display: '⚠️ 导出 24 词助记词（=完整私钥，单点）：将完整私钥写入本地文件',
       })
       if (!approved) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'USER_REJECTED' }) }] }
+        return errResp({ error: 'USER_REJECTED' })
       }
       // 本地钱包必须存在（地址校验基准）
       let localAddress: string
       try {
         localAddress = await getAddress()
       } catch {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'NO_WALLET' }) }] }
+        return errResp({ error: 'NO_WALLET' })
       }
       // 消费解锁令牌 → 组合私钥已在令牌会话中；导出助记词需要重新组合——改用恢复码文件
       // 简化：解锁令牌不承载组合私钥导出能力，助记词导出走「恢复码文件 + 本地解锁」的
@@ -130,14 +130,14 @@ export function createShardnestServer(
       try {
         const codes = await readRecoveryCodesFromFile()
         if (codes.length < 2) {
-          return { content: [{ type: 'text' as const, text: JSON.stringify({
+          return errResp({
             error: 'NEED_SECOND_RECOVERY_CODE',
             message: '本地恢复码仅 1 片（另一片已发邮箱）：请用 CLI `shardnest mnemonic-export`（设备片+恢复码模式）导出',
-          }) }] }
+          })
         }
         const result = await exportMnemonicFromCodes(codes[0], codes[1])
         if (result.address.toLowerCase() !== localAddress.toLowerCase()) {
-          return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'ADDRESS_MISMATCH' }) }] }
+          return errResp({ error: 'ADDRESS_MISMATCH' })
         }
         return {
           content: [{
@@ -153,12 +153,12 @@ export function createShardnestServer(
       } catch (err) {
         const e = err as NodeJS.ErrnoException
         if (e.code === 'ENOENT') {
-          return { content: [{ type: 'text' as const, text: JSON.stringify({
+          return errResp({
             error: 'NO_RECOVERY_FILE',
             message: '本地恢复码文件不存在（可能已 wipe）：请用 CLI `shardnest mnemonic-export`（设备片+恢复码模式）导出，或提供含恢复码的文件路径',
-          }) }] }
+          })
         }
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'EXPORT_FAILED', message: (err as Error).message }) }] }
+        return errResp({ error: 'EXPORT_FAILED', message: (err as Error).message })
       }
     },
   )
@@ -177,7 +177,7 @@ export function createShardnestServer(
         : '删除本机全部密钥材料（不可恢复；需用保存的恢复码/助记词重建）'
       const approved = await approval({ action: 'wipe_wallet', display })
       if (!approved) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'USER_REJECTED' }) }] }
+        return errResp({ error: 'USER_REJECTED' })
       }
       try {
         const { removed } = await wipeWallet(WIPE_CONFIRM_PHRASE, wipeScope)
@@ -194,7 +194,7 @@ export function createShardnestServer(
           }],
         }
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'WIPE_FAILED', message: (err as Error).message }) }] }
+        return errResp({ error: 'WIPE_FAILED', message: (err as Error).message })
       }
     },
   )
@@ -206,7 +206,7 @@ export function createShardnestServer(
       try {
         return { content: [{ type: 'text' as const, text: await getAddress() }] }
       } catch {
-        return { content: [{ type: 'text' as const, text: 'NO_WALLET' }] }
+        return errResp({ error: 'NO_WALLET' })
       }
     },
   )
@@ -221,11 +221,11 @@ export function createShardnestServer(
     async ({ signed_request, unlock_token }) => {
       // 闸门 1：平台背书验签（无平台私钥无法伪造；nonce/时效校验）
       if (!platformAddress) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'PLATFORM_ADDRESS_NOT_CONFIGURED' }) }] }
+        return errResp({ error: 'PLATFORM_ADDRESS_NOT_CONFIGURED' })
       }
       const check = verifySignedRequest(signed_request, platformAddress)
       if (!check.ok) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: check.error }) }] }
+        return errResp({ error: check.error })
       }
       const req = signed_request as SignedRequest
 
@@ -234,16 +234,16 @@ export function createShardnestServer(
       try {
         localAddress = await getAddress()
       } catch {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'NO_WALLET' }) }] }
+        return errResp({ error: 'NO_WALLET' })
       }
       if (req.wallet_address.toLowerCase() !== localAddress.toLowerCase()) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'WALLET_ADDRESS_MISMATCH' }) }] }
+        return errResp({ error: 'WALLET_ADDRESS_MISMATCH' })
       }
 
       // 闸门 2：用户确认（MCP 宿主注入；默认仅放行 sign_message）
       const approved = await approval({ action: req.action, display: req.display })
       if (!approved) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'USER_REJECTED' }) }] }
+        return errResp({ error: 'USER_REJECTED' })
       }
 
       // 解锁令牌（本地 unlock 生成，口令/恢复码永不经 LLM；单次使用 + 5min TTL）
@@ -251,7 +251,7 @@ export function createShardnestServer(
       try {
         privateKey = await consumeUnlockSession(unlock_token)
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'UNLOCK_INVALID', message: (err as Error).message }) }] }
+        return errResp({ error: 'UNLOCK_INVALID', message: (err as Error).message })
       }
       try {
         // P1-6: 签名内容 = 域分离 + 请求上下文绑定（wallet_address/platform_address/
@@ -293,10 +293,10 @@ export function createShardnestServer(
           const safePath = recovery_file_path ? await assertSafePath(recovery_file_path) : undefined
           const codes = await readRecoveryCodesFromFile(safePath)
           if (codes.length < 2) {
-            return { content: [{ type: 'text' as const, text: JSON.stringify({
+            return errResp({
               error: 'NEED_SECOND_RECOVERY_CODE',
               message: '本地恢复码仅 1 片（另一片已发邮箱）：请用 CLI `shardnest restore` 交互恢复，或提供含第二片的恢复码文件路径',
-            }) }] }
+            })
           }
           result = await restoreWallet(
             passphrase,
@@ -320,7 +320,7 @@ export function createShardnestServer(
           }],
         }
       } catch (err) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'RESTORE_FAILED', message: (err as Error).message }) }] }
+        return errResp({ error: 'RESTORE_FAILED', message: (err as Error).message })
       }
     },
   )

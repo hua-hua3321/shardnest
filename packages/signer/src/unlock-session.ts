@@ -130,10 +130,10 @@ export async function consumeUnlockSession(token: string, type: SessionType = 'u
     }
     const data = JSON.parse(await fs.readFile(consuming, 'utf8')) as { v?: number; purpose?: PassphrasePurpose | null; nonce: string; ct: string }
     // P1-7: 操作绑定校验——令牌用途与本次操作不一致即拒绝
-    // （v:2 起不再放行 null/undefined：篡改 purpose 为 null 绕过用途绑定的攻击面已关闭；
+    // 会话含 purpose 时调用方必须传入匹配值（漏传即拒绝，防静默绕过）
     // v:3 的 purpose 同时被 GCM AAD 认证，篡改为其他值同样解密失败）
-    if (purpose && data.purpose !== purpose) {
-      throw new Error(`口令令牌用途不匹配（令牌为 ${data.purpose ?? '未指定'}，本次操作为 ${purpose}）`)
+    if (data.purpose && purpose !== data.purpose) {
+      throw new Error(`口令令牌用途不匹配（令牌为 ${data.purpose ?? '未指定'}，本次操作为 ${purpose ?? '未指定'}）`)
     }
     const kek = sha256(new TextEncoder().encode(token))
     const nonce = Uint8Array.from(Buffer.from(data.nonce, 'base64'))
@@ -151,8 +151,8 @@ export async function consumeUnlockSession(token: string, type: SessionType = 'u
 }
 
 /** 消费口令会话 → 返回口令明文（用后请立即脱离作用域）
- * P1-7: purpose 必须与创建时一致 */
-export async function consumePassphraseSession(token: string, purpose?: PassphrasePurpose): Promise<string> {
+ * P1-7: purpose 必须与创建时一致（必填，漏传则拒绝） */
+export async function consumePassphraseSession(token: string, purpose: PassphrasePurpose): Promise<string> {
   const bytes = await consumeUnlockSession(token, 'passphrase', purpose)
   const passphrase = new TextDecoder().decode(bytes)
   bytes.fill(0)
