@@ -161,6 +161,47 @@ describe('signed_request v1', () => {
   })
 })
 
+describe('多平台白名单：verifySignedRequest 支持地址数组', () => {
+  const privB = generatePrivateKey()
+  const addrB = privateKeyToAddress(privB)
+  const privC = generatePrivateKey()
+  const addrC = privateKeyToAddress(privC)
+  const whitelist = [platformAddr, addrB]
+
+  it('白名单内任一平台签发 → 通过，返回实际签发方地址', () => {
+    const reqA = issueSignedRequest(makeOptions({ nonce: 'nonce-aaaa-12345678' }), platformPriv)
+    const okA = verifySignedRequest(reqA, whitelist)
+    expect(okA.ok).toBe(true)
+    expect(okA.platformAddress?.toLowerCase()).toBe(platformAddr.toLowerCase())
+
+    const reqB = issueSignedRequest(makeOptions({ nonce: 'nonce-bbbb-12345678' }), privB)
+    const okB = verifySignedRequest(reqB, whitelist)
+    expect(okB.ok).toBe(true)
+    expect(okB.platformAddress?.toLowerCase()).toBe(addrB.toLowerCase())
+  })
+
+  it('白名单外平台签发 → BAD_SIGNATURE', () => {
+    const reqC = issueSignedRequest(makeOptions(), privC)
+    expect(verifySignedRequest(reqC, whitelist).error).toBe('BAD_SIGNATURE')
+  })
+
+  it('单地址传参向后兼容（字符串与数组行为一致）', () => {
+    const req = issueSignedRequest(makeOptions(), platformPriv)
+    expect(verifySignedRequest(req, platformAddr).ok).toBe(true)
+    expect(verifySignedRequest(req, [platformAddr]).ok).toBe(true)
+  })
+
+  it('空数组 → INVALID_FORMAT（白名单不能为空）', () => {
+    const req = issueSignedRequest(makeOptions(), platformPriv)
+    expect(verifySignedRequest(req, []).error).toBe('INVALID_FORMAT')
+  })
+
+  it('数组中含非法格式地址 → INVALID_FORMAT（不静默忽略）', () => {
+    const req = issueSignedRequest(makeOptions(), platformPriv)
+    expect(verifySignedRequest(req, [platformAddr, 'junk']).error).toBe('INVALID_FORMAT')
+  })
+})
+
 describe('P1-5：验签对畸形输入返回结构化错误（不抛库异常）', () => {
   const valid = issueSignedRequest(makeOptions(), platformPriv)
 
@@ -190,5 +231,10 @@ describe('P1-5：验签对畸形输入返回结构化错误（不抛库异常）
 
   it('expectedPlatformAddress 格式非法 → INVALID_FORMAT（不抛）', () => {
     expect(verifySignedRequest(valid, 'not-an-address').error).toBe('INVALID_FORMAT')
+  })
+
+  it('expectedPlatformAddress 为含非法项的数组 → INVALID_FORMAT（不抛）', () => {
+    expect(verifySignedRequest(valid, [platformAddr, 42 as unknown as string]).error).toBe('INVALID_FORMAT')
+    expect(verifySignedRequest(valid, []).error).toBe('INVALID_FORMAT')
   })
 })

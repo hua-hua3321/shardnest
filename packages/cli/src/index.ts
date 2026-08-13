@@ -9,7 +9,7 @@
  *   shardnest restore     # 输入 2 个恢复码恢复（新设备/口令丢失）
  */
 import * as readline from 'node:readline'
-import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getRecoveryFileStatus, tryReadRecoveryCodeFromFile, validatePassphrase } from './commands'
+import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getRecoveryFileStatus, tryReadRecoveryCodeFromFile, validatePassphrase, generatePlatformKeypair } from './commands'
 import { createPassphraseSession } from '@wallet-services/signer'
 import { t } from './i18n'
 
@@ -122,6 +122,22 @@ async function main() {
       const token = await createUnlockToken(passphrase, code)
       console.log(t('\n🔓 解锁令牌（5 分钟有效，单次使用）：请粘贴到 MCP 工具调用中，勿转发给他人/其他平台', '\n🔓 Unlock token (valid 5 min, single-use): paste into the MCP tool call; do not forward to others/other platforms'))
       console.log(token)
+      break
+    }
+    case 'init-platform': {
+      // 第三方平台接入：生成背书密钥对 + 输出配置片段（多平台白名单格式）
+      const kp = generatePlatformKeypair()
+      console.log(t('\n🎫 平台背书密钥对（第三方平台接入 shardnest）', '\n🎫 Platform endorsement keypair (third-party shardnest integration)'))
+      console.log(t('\n平台地址（公开——配置到钱包服务白名单）:', '\nPlatform address (public — configure into wallet-service whitelist):'))
+      console.log(`  ${kp.address}`)
+      console.log(t('\n平台私钥（机密——仅用于签发 signed_request；请立即保存到 KMS/安全存储，勿泄露、勿进 LLM）:', '\nPlatform private key (SECRET — only for issuing signed_request; save to KMS/secure storage now, never leak, never send to an LLM):'))
+      console.log(`  ${kp.privateKeyHex}`)
+      console.log(t('\n=== 钱包服务侧配置（粘贴到用户本地 MCP 配置） ===', '\n=== Wallet-service side config (paste into the user\'s local MCP config) ==='))
+      console.log(`  环境变量（单平台）：SHARDNEST_PLATFORM_ADDRESS=${kp.address}`)
+      console.log(`  环境变量（多平台，逗号分隔追加）：SHARDNEST_PLATFORM_ADDRESS=0x已有平台A,${kp.address}`)
+      console.log(`  配置文件（推荐多平台）：SHARDNEST_PLATFORM_CONFIG=~/.shardnest/platforms.json`)
+      console.log(`    platforms.json 条目：{ "name": "your-platform", "address": "${kp.address}" }`)
+      console.log(t('\n⚠️  私钥 = 平台背书身份：泄露后攻击者可伪造平台请求诱导用户签名恶意内容；请安全保管并支持轮换。', '\n⚠️  Private key = platform endorsement identity: a leak lets attackers forge platform requests and trick users into signing malicious content; store securely and support rotation.'))
       break
     }
     case 'init': {
@@ -278,7 +294,7 @@ async function main() {
       break
     }
     default:
-      console.log(t('用法: shardnest [init|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export|wipe]\nunlock/sign 支持: --manual（强制手输恢复码） --recovery-file <path>（指定恢复码文件）', "Usage: shardnest [init|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export|wipe]\nunlock/sign support: --manual (force manual recovery code input) --recovery-file <path> (custom codes file)"))
+      console.log(t('用法: shardnest [init|init-platform|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export|wipe]\nunlock/sign 支持: --manual（强制手输恢复码） --recovery-file <path>（指定恢复码文件）', "Usage: shardnest [init|init-platform|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export|wipe]\nunlock/sign support: --manual (force manual recovery code input) --recovery-file <path> (custom codes file)"))
   }
 }
 

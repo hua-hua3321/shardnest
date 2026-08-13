@@ -371,6 +371,18 @@ export function validatePassphrase(passphrase: string): void {
   }
 }
 
+/** 平台背书密钥对（第三方平台接入 shardnest 用，init-platform 命令）：
+ * 平台自持私钥仅用于签发 signed_request；地址公开，配置到钱包服务白名单。
+ * 本函数只生成 + 返回（hex），不落盘——私钥安全由平台自行负责（KMS/HSM/安全存储）。
+ */
+export function generatePlatformKeypair(): { address: string; privateKeyHex: string } {
+  const kp = generateKeyPair()
+  return {
+    address: kp.address,
+    privateKeyHex: Buffer.from(kp.privateKey).toString('hex'),
+  }
+}
+
 /** 初始化：生成密钥对 → 2-of-3 分片 → 片①口令加密存设备 → 返回恢复码②③
  * 提供 email 时：自动将片③（备份分片）发送到邮箱（SMTP 未配置则 skipped）
  * mnemonic=true 时：同步生成 24 词助记词（完整私钥备份，可单独恢复；默认关闭）

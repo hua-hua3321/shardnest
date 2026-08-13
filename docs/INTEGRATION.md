@@ -36,7 +36,32 @@ bun add @wallet-services/protocol @wallet-services/verify-sdk
 # 或从源码 workspace 引用
 ```
 
+### 生成平台背书密钥对（一条命令）
+
+```bash
+bun packages/cli/src/index.ts init-platform
+# 输出：平台地址（公开）+ 平台私钥（机密，仅签发用）+ 钱包服务侧配置片段
+```
+
 **平台必须配置**：`SHARDNEST_PLATFORM_ADDRESS`（钱包服务的启动环境变量）= 平台背书地址。
+
+### 多平台配置（钱包服务侧，二选一或合并）
+
+```bash
+# 方式一：环境变量逗号分隔（简单场景，单平台也适用）
+SHARDNEST_PLATFORM_ADDRESS=0x平台A,0x平台B
+
+# 方式二：配置文件（复杂场景，推荐多平台；与 env 合并）
+SHARDNEST_PLATFORM_CONFIG=~/.shardnest/platforms.json
+# platforms.json:
+# [
+#   { "name": "exchange-a",    "address": "0x..." },
+#   { "name": "marketplace-b", "address": "0x..." }
+# ]
+```
+
+> ⚠️ 配置文件缺失/格式非法 → MCP server **拒绝启动**（安全边界不静默降级）。
+> 完整变量清单见仓库根 `.env.example`。
 
 ## 第二步：签发 signed_request（平台侧）
 
@@ -63,10 +88,12 @@ const request = issueSignedRequest({
 
 用户 Agent 调用 MCP `signed_request_sign`（参数 `signed_request` + `unlock_token`）：
 
-1. 闸门 1：钱包服务验签背书（`verifySignedRequest`）——非平台签发即拒绝
+1. 闸门 1：钱包服务验签背书（`verifySignedRequest`）——非白名单平台签发即拒绝
 2. 闸门 2：宿主 approval（默认仅放行 `sign_message`；其他动作需宿主配置）
 3. `wallet_address` 与本地钱包一致校验
-4. 消费解锁令牌（单次）→ 本地签名域分离请求上下文（绑定 `wallet_address`/`platform_address`/`action`/`intent_hash`/`nonce`/`expires_at`/`user_id`）→ 返回 `{ address, signature }`
+4. 消费解锁令牌（单次）→ 本地签名域分离请求上下文（绑定**验签恢复出的实际签发平台**/`wallet_address`/`action`/`intent_hash`/`nonce`/`expires_at`/`user_id`）→ 返回 `{ address, signature }`
+
+> 多平台下，签名绑定的是**实际签发方**地址（验签恢复），而非固定配置值——不同平台的请求签名可区分、防跨平台复用；重放防护也按平台隔离。
 
 ## 第四步：平台验签（verify-sdk）
 

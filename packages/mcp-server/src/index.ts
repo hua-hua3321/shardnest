@@ -7,14 +7,15 @@
  * 本层被攻破 = 拿不到任何持久化密钥材料。
  *
  * 环境变量：
- *   SHARDNEST_PLATFORM_ADDRESS  期望的平台背书地址（必填，验签用）
+ *   SHARDNEST_PLATFORM_ADDRESS  平台背书地址白名单（必填）：单个地址或逗号分隔多地址（多平台）
+ *   SHARDNEST_PLATFORM_CONFIG   平台配置文件路径（可选）：JSON 数组 [{ name, address }]，与 env 合并
  *   SHARDNEST_HOME              钱包目录（默认 ~/.shardnest）
  */
 import * as path from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { verifySignedRequest, walletSignMessage, type SignedRequest } from '@wallet-services/protocol'
+import { verifySignedRequest, walletSignMessage, type SignedRequest, type PlatformWhitelist } from '@wallet-services/protocol'
 import { initWallet, getAddress, restoreWallet, readRecoveryCodesFromFile, restoreFromMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getHomeDir, type WipeScope } from '@wallet-services/cli'
 import {defaultApproval, type ApprovalHandler, WalletVault, consumeUnlockSession, consumePassphraseSession, cleanupExpiredUnlockSessions} from '@wallet-services/signer'
 import { ReplayGuard } from './replay-guard'
@@ -22,7 +23,41 @@ import { ReplayGuard } from './replay-guard'
 /** P1-3：钱包侧重放防护（模块级单例，跨 MCP server 实例共享） */
 const replayGuard = new ReplayGuard()
 
-export const PLATFORM_ADDRESS = process.env.SHARDNEST_PLATFORM_ADDRESS ?? ''
+/** 解析逗号分隔的地址白名单（env 通道）：空值/空串 → 空数组 */
+export function parsePlatformAddresses(envValue: string | undefined): string[] {
+  if (!envValue || envValue.trim() === '') return []
+  return envValue.split(',').map((a) => a.trim()).filter((a) => a.length > 0)
+}
+
+/**
+ * 多平台配置双通道加载（stdio 启动路径）：
+ * 1. SHARDNEST_PLATFORM_ADDRESS：逗号分隔地址（简单场景，向后兼容）
+ * 2. SHARDNEST_PLATFORM_CONFIG：JSON 文件 [{ name, address }]（复杂场景，可与 env 合并）
+ * 文件缺失/格式非法 → 抛错拒绝启动（安全边界配置错误必须显式暴露，不静默降级）
+ */
+export async function loadPlatformAddresses(): Promise<string[]> {
+  const fromEnv = parsePlatformAddresses(process.env.SHARDNEST_PLATFORM_ADDRESS)
+  const configPath = process.env.SHARDNEST_PLATFORM_CONFIG?.trim()
+  if (!configPath) return fromEnv
+  const raw = await Bun.file(configPath).text().catch(() => {
+    throw new Error(`SHARDNEST_PLATFORM_CONFIG 指向的文件不存在或不可读: ${configPath}`)
+  })
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (err) {
+    throw new Error(`SHARDNEST_PLATFORM_CONFIG 不是合法 JSON: ${(err as Error).message}`)
+  }
+  if (!Array.isArray(parsed)) throw new Error('SHARDNEST_PLATFORM_CONFIG 必须是 JSON 数组 [{ name, address }]')
+  const fromFile: string[] = []
+  for (const item of parsed) {
+    if (typeof item !== 'object' || item === null || typeof (item as { address?: unknown }).address !== 'string') {
+      throw new Error('SHARDNEST_PLATFORM_CONFIG 条目必须含字符串 address 字段')
+    }
+    fromFile.push((item as { address: string }).address.trim())
+  }
+  return [...fromEnv, ...fromFile]
+}
 
 /** 错误响应：isError=true 确保 LLM/客户端不会将安全拒绝误判为成功 */
 function errResp(obj: Record<string, unknown>) {
@@ -53,7 +88,7 @@ async function assertSafePath(userPath: string): Promise<string> {
 
 export function createShardnestServer(
   approval: ApprovalHandler = defaultApproval,
-  platformAddress: string = PLATFORM_ADDRESS,
+  platformAddresses: PlatformWhitelist = parsePlatformAddresses(process.env.SHARDNEST_PLATFORM_ADDRESS),
 ) {
   const server = new McpServer({ name: 'shardnest', version: '0.3.0' })
 
@@ -224,18 +259,22 @@ export function createShardnestServer(
     },
     async ({ signed_request, unlock_token }) => {
       // 闸门 1：平台背书验签（无平台私钥无法伪造；nonce/时效校验）
-      if (!platformAddress) {
+      // 白名单：单地址（向后兼容）或多平台地址数组
+      const allowedList = Array.isArray(platformAddresses) ? platformAddresses : [platformAddresses]
+      if (allowedList.length === 0) {
         return errResp({ error: 'PLATFORM_ADDRESS_NOT_CONFIGURED' })
       }
-      const check = verifySignedRequest(signed_request, platformAddress)
+      const check = verifySignedRequest(signed_request, allowedList)
       if (!check.ok) {
         return errResp({ error: check.error })
       }
       const req = signed_request as SignedRequest
+      // 验签恢复出的实际签发方地址（多平台下用于签名绑定 + 重放隔离，而非固定配置值）
+      const verifiedPlatform = check.platformAddress ?? ''
 
       // P1-3：钱包侧重放防护（在消费解锁令牌前拦截，避免浪费一次性令牌）。
       // key 按平台地址隔离；同一 nonce 在有效期内第二次出现即视为重放。
-      if (replayGuard.isReplay(`${platformAddress.toLowerCase()}:${req.nonce}`, req.expires_at * 1000)) {
+      if (replayGuard.isReplay(`${verifiedPlatform.toLowerCase()}:${req.nonce}`, req.expires_at * 1000)) {
         return errResp({ error: 'NONCE_REUSED', message: '该 nonce 已被使用，疑似重放攻击' })
       }
 
@@ -268,7 +307,7 @@ export function createShardnestServer(
         // action/intent_hash/nonce/expires_at/user_id），与平台验签端共用 walletSignMessage
         const vault = new WalletVault()
         vault.unlockPrivateKey(privateKey)
-        const sig = vault.signMessage(walletSignMessage({ ...req, platform_address: platformAddress }))
+        const sig = vault.signMessage(walletSignMessage({ ...req, platform_address: verifiedPlatform }))
         const address = vault.getAddress()
         vault.wipe()
         return { content: [{ type: 'text' as const, text: JSON.stringify({ address, signature: Buffer.from(sig).toString('hex') }) }] }
@@ -346,7 +385,9 @@ if (process.argv[1]) {
   const self = await realpath(fileURLToPath(import.meta.url))
   const entry = await realpath(process.argv[1]).catch(() => process.argv[1] as string)
   if (entry === self) {
-    const server = createShardnestServer()
+    // 多平台配置双通道：env 逗号分隔 + JSON 配置文件；启动时校验，失败即拒绝启动
+    const addresses = await loadPlatformAddresses()
+    const server = createShardnestServer(defaultApproval, addresses)
     await server.connect(new StdioServerTransport())
   }
 }

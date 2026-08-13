@@ -8,4 +8,5 @@ export {
   type SignedRequestAction,
   type SignedRequestError,
   type VerifyResult,
+  type PlatformWhitelist,
 } from './signed-request'

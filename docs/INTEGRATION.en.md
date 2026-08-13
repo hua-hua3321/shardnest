@@ -36,7 +36,32 @@ bun add @wallet-services/protocol @wallet-services/verify-sdk
 # or reference via source workspace
 ```
 
+### Generate a platform endorsement keypair (one command)
+
+```bash
+bun packages/cli/src/index.ts init-platform
+# Outputs: platform address (public) + platform private key (SECRET, issuance only) + wallet-service config snippet
+```
+
 **Platform must configure**: `SHARDNEST_PLATFORM_ADDRESS` (wallet-service startup env var) = the platform endorsement address.
+
+### Multi-platform configuration (wallet-service side, either or merged)
+
+```bash
+# Option 1: comma-separated env var (simple; works for a single platform too)
+SHARDNEST_PLATFORM_ADDRESS=0xPlatformA,0xPlatformB
+
+# Option 2: config file (recommended for multiple platforms; merged with env)
+SHARDNEST_PLATFORM_CONFIG=~/.shardnest/platforms.json
+# platforms.json:
+# [
+#   { "name": "exchange-a",    "address": "0x..." },
+#   { "name": "marketplace-b", "address": "0x..." }
+# ]
+```
+
+> ⚠️ Missing/malformed config file → MCP server **refuses to start** (security boundary, no silent degradation).
+> Full variable reference: `.env.example` at the repo root.
 
 ## Step 2: Issue a signed_request (platform side)
 
@@ -62,10 +87,12 @@ const request = issueSignedRequest({
 
 The user's Agent calls MCP `signed_request_sign` (args `signed_request` + `unlock_token`):
 
-1. Gate 1: the wallet service verifies the platform endorsement (`verifySignedRequest`) — rejects non-platform issuances
+1. Gate 1: the wallet service verifies the platform endorsement (`verifySignedRequest`) — rejects issuances from platforms outside the whitelist
 2. Gate 2: host approval (default allows only `sign_message`; other actions require host config)
 3. `wallet_address` must match the local wallet
-4. Consume the unlock token (single-use) -> sign the domain-separated request context locally -> return `{ address, signature }`
+4. Consume the unlock token (single-use) -> sign the domain-separated request context locally (bound to the **actually recovered issuer platform** / `wallet_address` / `action` / `intent_hash` / `nonce` / `expires_at` / `user_id`) -> return `{ address, signature }`
+
+> With multiple platforms, the signature binds the **actual issuer** address (recovered from verification), not a fixed config value — requests from different platforms are distinguishable and cross-platform reuse is prevented; replay protection is also isolated per platform.
 
 ## Step 4: Verify on the platform (verify-sdk)
 

@@ -10,7 +10,17 @@ tags: ['changelog', 'release-notes', 'history']
 
 > 按里程碑归纳。每个提交均可 `git log --oneline` 追溯。
 
-## v0.3.x — 密码学现代化（当前）
+## v0.4.x — 多平台接入（当前）
+
+### 2026-08-12 · 多平台白名单 + 接入引导
+- **多平台背书白名单**：`verifySignedRequest` 接受地址数组（单地址向后兼容），验签恢复实际签发方地址返回 `platformAddress`
+- **配置双通道**：`SHARDNEST_PLATFORM_ADDRESS` 支持逗号分隔多地址（简单场景）；新增 `SHARDNEST_PLATFORM_CONFIG`（JSON 数组 `[{ name, address }]`，复杂场景，与 env 合并）；文件缺失/格式非法 → 拒绝启动（安全边界不静默降级）
+- **签名绑定实际签发方**：MCP 签名路径用验签恢复出的平台地址（而非固定配置值）做 `walletSignMessage` 绑定 + ReplayGuard 隔离——多平台下签名与真实平台一一对应
+- **`init-platform` 命令**：一条命令生成平台背书密钥对 + 输出全部配置片段（env/多平台逗号拼接/platforms.json 条目）
+- **`.env.example`**：全部 `SHARDNEST_*` 变量模板（含多平台注释），可直接复制
+- 新增 16 条测试（protocol 多平台白名单 5 条 + MCP 多平台签名/配置解析 7 条 + CLI 密钥对 1 条等）
+
+## v0.3.x — 密码学现代化
 
 ### 2026-08-09 · 第九轮 polish
 - **I18**：`getAddress` 校验 metadata（损坏 → 干净拒绝而非裸 TypeError）

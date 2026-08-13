@@ -22,6 +22,7 @@ import {getHomeDir,
   listSavedFiles,
   getRecoveryFileStatus,
   tryReadRecoveryCodeFromFile,
+  generatePlatformKeypair,
 } from '../src/commands'
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
@@ -632,5 +633,16 @@ describe('CLI 钱包流程（init → sign → restore 全闭环）', () => {
     await expect(initWallet('Aaaaaaaaaaaa1')).rejects.toThrow(/熵过低/)
     // 对照：正常混合口令应通过
     await expect(initWallet('test-passphrase-123!')).resolves.toBeDefined()
+  })
+})
+
+describe('init-platform：平台背书密钥对生成', () => {
+  it('生成合法密钥对（地址 0x40hex + 私钥 64hex），两次生成不同', () => {
+    const kp1 = generatePlatformKeypair()
+    expect(kp1.address).toMatch(/^0x[0-9a-fA-F]{40}$/)
+    expect(kp1.privateKeyHex).toMatch(/^[0-9a-fA-F]{64}$/)
+    const kp2 = generatePlatformKeypair()
+    expect(kp2.address).not.toBe(kp1.address)
+    expect(kp2.privateKeyHex).not.toBe(kp1.privateKeyHex)
   })
 })

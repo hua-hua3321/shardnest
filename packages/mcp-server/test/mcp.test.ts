@@ -4,7 +4,7 @@ import * as path from 'node:path'
 import { getHomeDir } from '@wallet-services/cli'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { createShardnestServer } from '../src/index'
+import { createShardnestServer, parsePlatformAddresses, loadPlatformAddresses } from '../src/index'
 import { issueSignedRequest, walletSignMessage } from '@wallet-services/protocol'
 import { generatePrivateKey, privateKeyToAddress } from '@wallet-services/core'
 import { recoverSigner } from '@wallet-services/verify-sdk'
@@ -429,5 +429,116 @@ describe('shardnest MCP 薄壳', () => {
     const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
     expect(out.error).toBe('USER_REJECTED')
     expect(res.isError).toBe(true)
+  })
+
+  it('多平台：白名单数组内另一平台签发 → 签名成功（验签绑定实际签发方）', async () => {
+    const platformBPriv = generatePrivateKey()
+    const platformBAddr = privateKeyToAddress(platformBPriv)
+    // 服务器配置为「平台 A + 平台 B」白名单
+    const server = createShardnestServer(() => true, [platformAddr, platformBAddr])
+    const client = new Client({ name: 'test-client', version: '1.0.0' })
+    const [c2s, s2c] = InMemoryTransport.createLinkedPair()
+    await Promise.all([server.connect(s2c), client.connect(c2s)])
+
+    const created = await createWallet(client, PASSPHRASE)
+    // 平台 B 签发（非默认平台 A）
+    const req = issueSignedRequest({
+      action: 'sign_message',
+      intentHash: '0x' + 'ff'.repeat(32),
+      display: '平台 B 的消息签名请求',
+      userId: 'user-b',
+      walletAddress: created.address,
+      nonce: 'nonce-mcp-00000004',
+      expiresAt: Math.floor(Date.now() / 1000) + 300,
+    }, platformBPriv)
+    const token = await createUnlockToken(PASSPHRASE, created.recoveryCodes[0])
+    const res = await client.callTool({
+      name: 'signed_request_sign',
+      arguments: { signed_request: req, unlock_token: token },
+    })
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
+    expect(out.address).toBe(created.address)
+    // 签名必须绑定平台 B 地址（验签还原地址用平台 B 才能成功）
+    const sig = Uint8Array.from(Buffer.from(out.signature, 'hex'))
+    const withB = recoverSigner(walletSignMessage({ ...req, platform_address: platformBAddr }), sig)
+    expect(withB.toLowerCase()).toBe(created.address.toLowerCase())
+    const withA = recoverSigner(walletSignMessage({ ...req, platform_address: platformAddr }), sig)
+    expect(withA.toLowerCase()).not.toBe(created.address.toLowerCase())
+  })
+
+  it('多平台：白名单外的平台 → BAD_SIGNATURE 拒绝', async () => {
+    const outsiderPriv = generatePrivateKey()
+    const outsiderAddr = privateKeyToAddress(outsiderPriv)
+    const server = createShardnestServer(() => true, [platformAddr, outsiderAddr])
+    const client = new Client({ name: 'test-client', version: '1.0.0' })
+    const [c2s, s2c] = InMemoryTransport.createLinkedPair()
+    await Promise.all([server.connect(s2c), client.connect(c2s)])
+
+    const created = await createWallet(client, PASSPHRASE)
+    const strangerPriv = generatePrivateKey() // 第三个平台（不在白名单）
+    const req = issueSignedRequest({
+      action: 'sign_message',
+      intentHash: '0x' + 'aa'.repeat(32),
+      display: '陌生平台请求',
+      userId: 'user-x',
+      walletAddress: created.address,
+      nonce: 'nonce-mcp-00000005',
+      expiresAt: Math.floor(Date.now() / 1000) + 300,
+    }, strangerPriv)
+    const token = await createUnlockToken(PASSPHRASE, created.recoveryCodes[0])
+    const res = await client.callTool({
+      name: 'signed_request_sign',
+      arguments: { signed_request: req, unlock_token: token },
+    })
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
+    expect(out.error).toBe('BAD_SIGNATURE')
+    expect(res.isError).toBe(true)
+  })
+})
+
+describe('多平台配置解析（双通道）', () => {
+  it('parsePlatformAddresses：逗号分隔 + 空白容忍 + 空值回退', () => {
+    expect(parsePlatformAddresses('0x1111111111111111111111111111111111111111, 0x2222222222222222222222222222222222222222 '))
+      .toEqual(['0x1111111111111111111111111111111111111111', '0x2222222222222222222222222222222222222222'])
+    expect(parsePlatformAddresses('0x1111111111111111111111111111111111111111')).toHaveLength(1)
+    expect(parsePlatformAddresses(undefined)).toEqual([])
+    expect(parsePlatformAddresses('  ,  ')).toEqual([])
+    expect(parsePlatformAddresses('')).toEqual([])
+  })
+
+  it('loadPlatformAddresses：仅 env 通道（单平台/逗号分隔）', async () => {
+    const prev = process.env.SHARDNEST_PLATFORM_ADDRESS
+    const prevCfg = process.env.SHARDNEST_PLATFORM_CONFIG
+    delete process.env.SHARDNEST_PLATFORM_CONFIG
+    process.env.SHARDNEST_PLATFORM_ADDRESS = '0x1111111111111111111111111111111111111111,0x2222222222222222222222222222222222222222'
+    try {
+      expect(await loadPlatformAddresses()).toHaveLength(2)
+    } finally {
+      if (prev === undefined) delete process.env.SHARDNEST_PLATFORM_ADDRESS
+      else process.env.SHARDNEST_PLATFORM_ADDRESS = prev
+      if (prevCfg === undefined) delete process.env.SHARDNEST_PLATFORM_CONFIG
+      else process.env.SHARDNEST_PLATFORM_CONFIG = prevCfg
+    }
+  })
+
+  it('loadPlatformAddresses：env + 配置文件合并；格式非法 → 抛错拒绝启动', async () => {
+    const prevCfg = process.env.SHARDNEST_PLATFORM_CONFIG
+    const cfgPath = path.join(TEST_HOME, 'platforms.json')
+    await fs.mkdir(TEST_HOME, { recursive: true })
+    await fs.writeFile(cfgPath, JSON.stringify([{ name: 'exchange-a', address: '0x3333333333333333333333333333333333333333' }]))
+    process.env.SHARDNEST_PLATFORM_CONFIG = cfgPath
+    try {
+      const addrs = await loadPlatformAddresses()
+      expect(addrs).toContain('0x3333333333333333333333333333333333333333')
+      // 非法 JSON → 拒绝启动
+      await fs.writeFile(cfgPath, '{not json')
+      await expect(loadPlatformAddresses()).rejects.toThrow(/JSON/)
+      // 非数组 → 拒绝启动
+      await fs.writeFile(cfgPath, JSON.stringify({ name: 'x', address: '0x3333333333333333333333333333333333333333' }))
+      await expect(loadPlatformAddresses()).rejects.toThrow(/数组/)
+    } finally {
+      if (prevCfg === undefined) delete process.env.SHARDNEST_PLATFORM_CONFIG
+      else process.env.SHARDNEST_PLATFORM_CONFIG = prevCfg
+    }
   })
 })

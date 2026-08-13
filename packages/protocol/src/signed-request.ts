@@ -159,20 +159,41 @@ export type SignedRequestError = 'INVALID_FORMAT' | 'EXPIRED' | 'BAD_SIGNATURE' 
 
 export interface VerifyResult {
   ok: boolean
-  /** 平台背书地址（验签还原） */
+  /** 平台背书地址（验签还原）——多平台白名单下返回实际签发方 */
   platformAddress?: string
   error?: SignedRequestError
+}
+
+/**
+ * 平台地址白名单：单地址（向后兼容）或地址数组（多平台）。
+ * 地址必须为 0x + 40 hex；归一化为小写集合供匹配。
+ */
+export type PlatformWhitelist = string | readonly string[]
+
+/** 归一化白名单：非法地址/空列表返回 null（调用方按 INVALID_FORMAT 拒绝） */
+function normalizeWhitelist(expected: PlatformWhitelist): string[] | null {
+  const list = Array.isArray(expected) ? expected : [expected]
+  if (list.length === 0) return null
+  const out: string[] = []
+  for (const addr of list) {
+    if (typeof addr !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(addr)) return null
+    out.push(addr.toLowerCase())
+  }
+  return out
 }
 
 /**
  * 钱包侧验签（平台背书校验）：
  * 1. 结构校验（v/action/nonce/expires_at 格式）
  * 2. 时效校验（expires_at > now）
- * 3. 签名校验（还原平台地址，并与期望平台地址匹配）
+ * 3. 签名校验（还原平台地址，并在白名单中匹配——支持多平台）
+ *
+ * 多平台：expectedPlatformAddress 传地址数组（白名单）；验签恢复出的
+ * 实际签发方地址经 platformAddress 返回，调用方用它做签名绑定/重放隔离。
  */
 export function verifySignedRequest(
   req: unknown,
-  expectedPlatformAddress: string,
+  expectedPlatformAddress: PlatformWhitelist,
   nowMs: number = Date.now(),
 ): VerifyResult {
   if (typeof req !== 'object' || req === null) return { ok: false, error: 'INVALID_FORMAT' }
@@ -204,9 +225,9 @@ export function verifySignedRequest(
   }
   const sig = Uint8Array.from(Buffer.from(r.platform_signature, 'hex'))
   if (sig.length !== 65) return { ok: false, error: 'BAD_SIGNATURE' }
-  if (typeof expectedPlatformAddress !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(expectedPlatformAddress)) {
-    return { ok: false, error: 'INVALID_FORMAT' }
-  }
+  // 白名单归一化：单地址（向后兼容）或多平台地址数组；非法/空 → 拒绝
+  const allowed = normalizeWhitelist(expectedPlatformAddress)
+  if (!allowed) return { ok: false, error: 'INVALID_FORMAT' }
   const { intent_hash, display, user_id, wallet_address } = r
   const base = { v: 1 as const, action: r.action as SignedRequestAction, intent_hash, display, user_id, wallet_address, nonce: r.nonce, expires_at: r.expires_at }
   let recovered: `0x${string}`
@@ -216,7 +237,7 @@ export function verifySignedRequest(
     // P1-5: 不可信签名导致公钥恢复/验签异常 → 结构化 BAD_SIGNATURE（不抛到调用方）
     return { ok: false, error: 'BAD_SIGNATURE' }
   }
-  if (recovered.toLowerCase() !== expectedPlatformAddress.toLowerCase()) {
+  if (!allowed.includes(recovered.toLowerCase())) {
     return { ok: false, error: 'BAD_SIGNATURE' }
   }
   return { ok: true, platformAddress: recovered }
