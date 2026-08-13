@@ -7,7 +7,7 @@
  * - 测试：自动放行/拒绝
  */
 export interface ApprovalRequest {
-  action: 'sign_message' | 'sign_tx' | 'bind_wallet' | 'withdraw_confirm' | 'wipe_wallet' | 'mnemonic_export'
+  action: 'sign_message' | 'sign_tx' | 'bind_wallet' | 'withdraw_confirm' | 'wipe_wallet' | 'mnemonic_export' | 'restore_wallet'
   display: string
 }
 

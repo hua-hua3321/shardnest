@@ -44,7 +44,7 @@ Address: 0xAFD0...
 **Do these 3 things right after creation**:
 1. **Save the recovery codes** — `recovery-codes.txt` is written to `~/.shardnest/`; **do NOT hand-copy** (64-char hex), just move the file
 2. **Check your mailbox** — if an email was provided, share 3 was sent (local keeps only 1 share = true 3-location distribution)
-3. **Verify backup layout** — without email, 2 shares stay local with a prominent warning; move one share offline
+3. **Verify backup layout** — without email, 2 shares stay local with a prominent warning. **Note: moving the file ≠ separation** — both shares live in `recovery-codes.txt`; moving the whole file elsewhere keeps them together (2-of-3 is void). Run `shardnest split-recovery <dir>` to split them into two separate files, move ONE offline (paper/password manager/another device), then delete the local copy of that share
 
 > **Mnemonic (optional)**: the 24-word mnemonic follows standard BIP-39/44 (importable into MetaMask for the same address).
 > But the mnemonic = full private key (single point): a leak means total loss. Regular users should skip it;

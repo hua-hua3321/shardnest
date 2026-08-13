@@ -283,6 +283,7 @@ async function encryptShare(share: Share, passphrase: string): Promise<{ data: s
     payload[0] = share.index
     payload.set(share.bytes, 1)
     const ct = cipher.encrypt(payload)
+    payload.fill(0) // 中风险: 明文分片副本清零（评审 F：与 KEK 同标准）
     return {
       data: Buffer.from(nonce).toString('base64') + '.' + Buffer.from(ct).toString('base64'),
       salt: Buffer.from(salt).toString('base64'),
@@ -383,6 +384,35 @@ export function generatePlatformKeypair(): { address: string; privateKeyHex: str
   }
 }
 
+/** init-platform --out：平台私钥 0600 落盘（与恢复码/助记词同原则——敏感材料文件交付，不进终端/剪贴板） */
+export async function savePlatformPrivateKey(filePath: string, privateKeyHex: string): Promise<string> {
+  const resolved = path.resolve(filePath)
+  await fs.mkdir(path.dirname(resolved), { recursive: true })
+  await fs.writeFile(resolved, privateKeyHex + '\n', { mode: 0o600 })
+  return resolved
+}
+
+/** split-recovery：本地恢复码文件拆成两个独立文件（2-of-3 分离要求两片不同载体）。
+ * 仅生成独立副本，不删除原文件——删除动作留给用户确认离线保存后自行完成 */
+export async function splitRecoveryCodes(dir: string): Promise<{ files: string[]; codes: string[] }> {
+  const codes = await readRecoveryCodesFromFile()
+  if (codes.length < 2) {
+    // 本地仅 1 片（另一片已发邮箱）：两片已天然分离，无需拆分
+    return { files: [], codes }
+  }
+  await fs.mkdir(dir, { recursive: true })
+  const files: string[] = []
+  for (const code of codes) {
+    // 取分片序号：sn1-<index>-... → [1]；sn2-<setId>-<index>-... → [2]（[1] 是批次 ID）
+    const parts = code.split('-')
+    const idx = parts[0] === 'sn2' ? parts[2] : parts[1]
+    const file = path.join(dir, `recovery-share-${idx}.txt`)
+    await fs.writeFile(file, code + '\n', { mode: 0o600 })
+    files.push(file)
+  }
+  return { files, codes }
+}
+
 /** 初始化：生成密钥对 → 2-of-3 分片 → 片①口令加密存设备 → 返回恢复码②③
  * 提供 email 时：自动将片③（备份分片）发送到邮箱（SMTP 未配置则 skipped）
  * mnemonic=true 时：同步生成 24 词助记词（完整私钥备份，可单独恢复；默认关闭）
@@ -476,9 +506,11 @@ export async function restoreFromMnemonic(
 ): Promise<InitResult> {
   validatePassphrase(passphrase)
   const entropy = mnemonicToEntropy(mnemonic) // O4A: 标准 24 词 → 熵（校验和校验）
+  let priv: Uint8Array | null = null
   try {
     const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-services/core')
-    const address = privateKeyToAddress(derivePrivateKeyFromEntropy(entropy))
+    priv = derivePrivateKeyFromEntropy(entropy) // 派生账户私钥（=完整访问权）
+    const address = privateKeyToAddress(priv)
 
     const want = expectedAddress ?? (await readOldAddress())
     if (want && want.toLowerCase() !== address.toLowerCase()) {
@@ -491,6 +523,7 @@ export async function restoreFromMnemonic(
       note: '已从助记词重建分片体系（2-of-3）；⚠️ 请妥善保存新恢复码；旧恢复码/旧邮箱备份片仍可重组同一私钥——请作废销毁并删除旧邮件；原助记词仍可恢复（单点，建议销毁或严格保管）。注意：本版本起助记词为标准 BIP-39/44 语义（熵→m/44\'/60\'/0\'/0/0 派生）——旧版本生成的助记词（私钥直接编码）在新版本下无法恢复同一地址，请用旧版本软件或恢复码恢复',
     }
   } finally {
+    priv?.fill(0) // 评审 F5：派生私钥用后清零（=完整访问权，与 entropy 同标准）
     entropy.fill(0) // O4A: 根熵清零（所有路径）
   }
 }
@@ -549,76 +582,77 @@ export async function restoreWallet(
   email?: string,
 ): Promise<InitResult> {
   validatePassphrase(passphrase)
-  const shares = recoveryCodes.map(decodeRecoveryCode)
-  assertSameShareSet(shares) // P1-2: 混用两个钱包的恢复码 → 批次不一致 → 拒绝
-  // P1（全仓审计）：全 sn1（legacy，无批次标识）时，若无本地可信 metadata 且未传
-  // expectedAddress——无法确认两片来自同一钱包，新设备混用会静默恢复出「第三个钱包」，拒绝
-  const isLegacyOnly = shares.every((s) => s.setId === undefined)
-  if (isLegacyOnly) {
-    const want = expectedAddress ?? (await readOldAddress())
-    if (!want) {
-      throw new Error('旧版恢复码（sn1）缺少批次标识，无法自动确认来自同一钱包；新设备恢复必须提供期望地址（expectedAddress）')
-    }
-  }
-  const fresh = reshareShares(shares, { shares: 3, threshold: 2 })
-  const enc = await encryptShare(fresh[0], passphrase)
-  const entropy = combineShares([fresh[0], fresh[1]]) // O4A: 重组根熵
-  const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-services/core')
-  const privateKey = derivePrivateKeyFromEntropy(entropy) // BIP-39/44 派生
-  const address = privateKeyToAddress(privateKey)
-
-  // 地址交叉校验：期望地址 or 旧 metadata 地址
-  const want = expectedAddress ?? (await readOldAddress())
-  if (want && want.toLowerCase() !== address.toLowerCase()) {
-    privateKey.fill(0)
-    entropy.fill(0)
-    throw new Error(`恢复出的地址 (${address}) 与目标地址 (${want}) 不一致——恢复码可能输错，操作已中止`)
-  }
-
-  // P1-2: 新恢复码使用新批次 ID（reshare 后旧批次作废，靠物理清理旧载体）
-  const newSetId = Buffer.from(randomBytes(8)).toString('hex')
-  const newCodes = [fresh[1], fresh[2]].map((s) => encodeRecoveryCode(s, newSetId))
-
-  // 可失败操作前置：邮箱备份（新片③）+ 恢复码落盘
-  let backupStatus: 'sent' | 'skipped' | undefined
-  if (email) {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      privateKey.fill(0)
-      entropy.fill(0)
-      throw new Error('邮箱格式无效')
-    }
-    backupStatus = await sendBackupShare(email, address, newCodes[1])
-  }
-  // 存储策略 A+B（同 createWalletFromPrivateKey）
-  const emailed = backupStatus === 'sent'
-  const localCodes = emailed ? [newCodes[0]] : newCodes
-
-  // 事务式提交（P0-2）：meta/device/recovery 全部 staging + fsync 成功后统一
-  // rename。任一失败 → 清理 staging，正式路径零接触——恢复失败时旧钱包完整保留
+  // 评审 F5：敏感材料生命周期统一进 try/finally——所有早抛路径（sn1 无批次/
+  // 地址不匹配/邮箱格式/SMTP 失败）均清零，杜绝明文分片堆残留（任意 2 片 = 钱包根熵 = 私钥）
+  let shares: Share[] = []
+  let fresh: Share[] = []
+  let entropy: Uint8Array = new Uint8Array(0)
+  let privateKey: Uint8Array | null = null
   try {
+    shares = recoveryCodes.map(decodeRecoveryCode)
+    assertSameShareSet(shares) // P1-2: 混用两个钱包的恢复码 → 批次不一致 → 拒绝
+    // P1（全仓审计）：全 sn1（legacy，无批次标识）时，若无本地可信 metadata 且未传
+    // expectedAddress——无法确认两片来自同一钱包，新设备混用会静默恢复出「第三个钱包」，拒绝
+    const isLegacyOnly = shares.every((s) => s.setId === undefined)
+    if (isLegacyOnly) {
+      const want = expectedAddress ?? (await readOldAddress())
+      if (!want) {
+        throw new Error('旧版恢复码（sn1）缺少批次标识，无法自动确认来自同一钱包；新设备恢复必须提供期望地址（expectedAddress）')
+      }
+    }
+    fresh = reshareShares(shares, { shares: 3, threshold: 2 })
+    const enc = await encryptShare(fresh[0], passphrase)
+    entropy = combineShares([fresh[0], fresh[1]]) // O4A: 重组根熵
+    const { privateKeyToAddress, derivePrivateKeyFromEntropy } = await import('@wallet-services/core')
+    privateKey = derivePrivateKeyFromEntropy(entropy) // BIP-39/44 派生
+    const address = privateKeyToAddress(privateKey)
+
+    // 地址交叉校验：期望地址 or 旧 metadata 地址
+    const want = expectedAddress ?? (await readOldAddress())
+    if (want && want.toLowerCase() !== address.toLowerCase()) {
+      throw new Error(`恢复出的地址 (${address}) 与目标地址 (${want}) 不一致——恢复码可能输错，操作已中止`)
+    }
+
+    // P1-2: 新恢复码使用新批次 ID（reshare 后旧批次作废，靠物理清理旧载体）
+    const newSetId = Buffer.from(randomBytes(8)).toString('hex')
+    const newCodes = [fresh[1], fresh[2]].map((s) => encodeRecoveryCode(s, newSetId))
+
+    // 可失败操作前置：邮箱备份（新片③）+ 恢复码落盘
+    let backupStatus: 'sent' | 'skipped' | undefined
+    if (email) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        throw new Error('邮箱格式无效')
+      }
+      backupStatus = await sendBackupShare(email, address, newCodes[1])
+    }
+    // 存储策略 A+B（同 createWalletFromPrivateKey）
+    const emailed = backupStatus === 'sent'
+    const localCodes = emailed ? [newCodes[0]] : newCodes
+
+    // 事务式提交（P0-2）：meta/device/recovery 全部 staging + fsync 成功后统一
+    // rename。任一失败 → 清理 staging，正式路径零接触——恢复失败时旧钱包完整保留
     await commitAtomically([
       { file: metaFile(), content: JSON.stringify({ version: 1, address }, null, 2), mode: 0o600 },
       { file: deviceFile(), content: JSON.stringify({ version: 2, share: enc }, null, 2), mode: 0o600 },
       { file: recoveryFile(), content: buildRecoveryCodesContent(localCodes, emailed), mode: 0o600 },
     ])
-  } finally {
-    privateKey.fill(0)
-    entropy.fill(0) // O4A: 根熵清零
-    for (const s of [...shares, ...fresh]) s.bytes.fill(0) // 不变式 5：输入 2 片 + 新 3 片一并清零
-  }
 
-  return {
-    address,
-    recoveryCodes: newCodes,
-    recoveryFile: recoveryFile(),
-    backupEmail: email,
-    backupStatus,
-    note: email
-      ? '新备份分片已发送到邮箱；请删除旧邮件中的备份分片（旧分片集仍可重组同一私钥）'
-      : '如曾使用邮箱备份，请提供 email 重新备份（旧邮件中的分片仍有效，建议删除）',
+    return {
+      address,
+      recoveryCodes: newCodes,
+      recoveryFile: recoveryFile(),
+      backupEmail: email,
+      backupStatus,
+      note: email
+        ? '新备份分片已发送到邮箱；请删除旧邮件中的备份分片（旧分片集仍可重组同一私钥）'
+        : '如曾使用邮箱备份，请提供 email 重新备份（旧邮件中的分片仍有效，建议删除）',
+    }
+  } finally {
+    privateKey?.fill(0)
+    entropy.fill(0) // O4A: 根熵清零
+    for (const s of [...shares, ...fresh]) s.bytes.fill(0) // 不变式 5：输入 2 片 + 新 3 片一并清零（含早抛路径）
   }
 }
-
 /** 从本地恢复码文件读取恢复码（MCP 场景：路径进 LLM，内容不进）
  * 注意：邮箱备份已送达时本地可能仅 1 片——调用方需自行判断是否足够
  */

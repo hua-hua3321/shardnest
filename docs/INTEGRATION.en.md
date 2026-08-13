@@ -98,9 +98,13 @@ The user's Agent calls MCP `signed_request_sign` (args `signed_request` + `unloc
 
 ```ts
 import { recoverSigner } from '@wallet-services/verify-sdk'
+import { walletSignMessage } from '@wallet-services/protocol'  // rebuild the signed message (same function as the wallet side)
 
-const { message, signature } = signedResponse   // signature: 65 bytes r||s||v (hex)
-const recovered = recoverSigner(message, hexToBytes(signature))
+const { address, signature } = signedResponse   // signature: 65 bytes r||s||v (hex)
+// ⚠️ Rebuild the message with walletSignMessage (domain separation + request-context binding) —
+// do NOT hand-assemble bytes (intent_hash is a 0x+64hex string, expires_at a decimal string, both length-prefixed)
+const message = walletSignMessage({ ...signedRequest, platform_address: platformAddress })
+const recovered = recoverSigner(message, Uint8Array.from(Buffer.from(signature, 'hex')))
 if (recovered.toLowerCase() !== boundWalletAddress.toLowerCase()) {
   throw new Error('Signature address does not match the bound address — rejected')
 }
@@ -128,15 +132,20 @@ User requests withdrawal -> platform creates an order -> issues withdraw_confirm
 
 | error | meaning | handling |
 |-------|---------|----------|
-| `BAD_SIGNATURE` | platform endorsement verification failed | check platform address/issuance (canonicalBytes consistency) |
+| `BAD_SIGNATURE` | platform endorsement verification failed / not in whitelist | check platform address/issuance (canonicalBytes consistency) |
 | `EXPIRED` / `INVALID_FORMAT` | request expired / malformed | re-issue |
-| `ACTION_NOT_ALLOWED` | action not in the whitelist | check the action enum |
+| `PLATFORM_ADDRESS_NOT_CONFIGURED` | no platform whitelist configured | set `SHARDNEST_PLATFORM_ADDRESS` or `SHARDNEST_PLATFORM_CONFIG` |
+| `NONCE_REUSED` | nonce already used (wallet-side replay guard) | request a new nonce from the platform |
 | `WALLET_ADDRESS_MISMATCH` | target address != local wallet | check the wallet_address arg |
-| `USER_REJECTED` | user/host denied approval | ask the user to confirm |
+| `USER_REJECTED` | user/host denied approval (incl. restore/wipe/export) | ask the user to confirm |
 | `NO_WALLET` | no local wallet | wallet_create / CLI init first |
 | `WALLET_EXISTS` | wallet already exists (create rejected) | wipe (host approval) or CLI confirm |
-| `TOKEN_EXPIRED` / `TOKEN_CONSUMED` | token expired / already used | generate a new token |
-| `NEED_SECOND_RECOVERY_CODE` | recovery needs 2 codes | provide the second one |
+| `TOKEN_INVALID` | passphrase token invalid/expired/used/wrong purpose | run `shardnest passphrase-token` again |
+| `UNLOCK_INVALID` | unlock token invalid/expired/used | run `shardnest unlock` again |
+| `RESTORE_FAILED` | restore failed (codes/mnemonic/email) | inspect the message field |
+| `NO_RECOVERY_FILE` / `NEED_SECOND_RECOVERY_CODE` | recovery file missing / only 1 share local | provide a file path or the second share (email/offline) |
+| `ADDRESS_MISMATCH` | combined address != local wallet | verify codes/mnemonic source |
+| `EXPORT_FAILED` / `WIPE_FAILED` | export/wipe failed | inspect the message field |
 
 ## Security requirements (platform side, must-read)
 

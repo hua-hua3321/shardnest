@@ -501,6 +501,49 @@ describe('shardnest MCP 薄壳', () => {
     expect(out.error).toBe('BAD_SIGNATURE')
     expect(res.isError).toBe(true)
   })
+
+  it('评审 F4：默认 approval 下 wallet_restore 拒绝（破坏性操作须用户确认）', async () => {
+    const client = await connectWithDefaultApproval()
+    const created = await createWallet(client, PASSPHRASE)
+    const res = await client.callTool({
+      name: 'wallet_restore',
+      arguments: {
+        passphrase_token: await createPassphraseSession(PASSPHRASE, 'restore'),
+        expected_address: created.address,
+      },
+    })
+    const out = JSON.parse(((res.content as unknown[])[0] as { text: string }).text)
+    expect(out.error).toBe('USER_REJECTED')
+    expect(res.isError).toBe(true)
+  })
+
+  it('评审 F7：无效解锁令牌不消耗 nonce（重放记录在令牌消费后）', async () => {
+    const client = await connect()
+    const created = await createWallet(client, PASSPHRASE)
+    const req = issueSignedRequest({
+      action: 'sign_message',
+      intentHash: '0x' + '77'.repeat(32),
+      display: 'F7 nonce 不被无效令牌烧掉',
+      userId: 'user-f7',
+      walletAddress: created.address,
+      nonce: 'nonce-mcp-f7-00000001',
+      expiresAt: Math.floor(Date.now() / 1000) + 300,
+    }, platformPriv)
+    // 第一次：无效令牌 → UNLOCK_INVALID（不应记录 nonce）
+    const r1 = await client.callTool({
+      name: 'signed_request_sign',
+      arguments: { signed_request: req, unlock_token: '0'.repeat(64) },
+    })
+    expect(JSON.parse(((r1.content as unknown[])[0] as { text: string }).text).error).toBe('UNLOCK_INVALID')
+    // 第二次：有效令牌 → 签名成功（证明 nonce 未被无效令牌烧掉）
+    const token = await createUnlockToken(PASSPHRASE, created.recoveryCodes[0])
+    const r2 = await client.callTool({
+      name: 'signed_request_sign',
+      arguments: { signed_request: req, unlock_token: token },
+    })
+    const out2 = JSON.parse(((r2.content as unknown[])[0] as { text: string }).text)
+    expect(out2.address).toBe(created.address)
+  })
 })
 
 describe('多平台配置解析（双通道）', () => {
@@ -543,6 +586,11 @@ describe('多平台配置解析（双通道）', () => {
       // 非数组 → 拒绝启动
       await fs.writeFile(cfgPath, JSON.stringify({ name: 'x', address: '0x3333333333333333333333333333333333333333' }))
       await expect(loadPlatformAddresses()).rejects.toThrow(/数组/)
+      // 评审 F6：地址格式非法 → 拒绝启动（不静默全拒）
+      await fs.writeFile(cfgPath, JSON.stringify([{ name: 'x', address: 'junk' }]))
+      await expect(loadPlatformAddresses()).rejects.toThrow(/格式非法/)
+      await fs.writeFile(cfgPath, JSON.stringify([{ name: 'x', address: '  ' }]))
+      await expect(loadPlatformAddresses()).rejects.toThrow(/格式非法/)
     } finally {
       if (prevCfg === undefined) delete process.env.SHARDNEST_PLATFORM_CONFIG
       else process.env.SHARDNEST_PLATFORM_CONFIG = prevCfg

@@ -99,9 +99,13 @@ const request = issueSignedRequest({
 
 ```ts
 import { recoverSigner } from '@wallet-services/verify-sdk'
+import { walletSignMessage } from '@wallet-services/protocol'  // 重建签名消息（与钱包侧同一函数）
 
-const { message, signature } = signedResponse   // signature: 65 字节 r||s||v（hex）
-const recovered = recoverSigner(message, hexToBytes(signature))
+const { address, signature } = signedResponse   // signature: 65 字节 r||s||v（hex）
+// ⚠️ 必须用 walletSignMessage 重建消息（域分离 + 请求上下文绑定）——
+// 勿自行拼字节（intent_hash 为 0x+64hex 字符串、expires_at 为十进制字符串，均带长度前缀）
+const message = walletSignMessage({ ...signedRequest, platform_address: platformAddress })
+const recovered = recoverSigner(message, Uint8Array.from(Buffer.from(signature, 'hex')))
 if (recovered.toLowerCase() !== boundWalletAddress.toLowerCase()) {
   throw new Error('签名地址与绑定地址不一致——拒绝')
 }
@@ -129,15 +133,20 @@ if (recovered.toLowerCase() !== boundWalletAddress.toLowerCase()) {
 
 | error | 含义 | 处理 |
 |-------|------|------|
-| `BAD_SIGNATURE` | 平台背书验签失败 | 检查平台地址/签发实现（canonicalBytes 一致性） |
+| `BAD_SIGNATURE` | 平台背书验签失败/不在白名单 | 检查平台地址/签发实现（canonicalBytes 一致性） |
 | `EXPIRED` / `INVALID_FORMAT` | 请求过期/格式错误 | 重新签发 |
-| `ACTION_NOT_ALLOWED` | action 不在白名单 | 检查 action 枚举 |
+| `PLATFORM_ADDRESS_NOT_CONFIGURED` | 未配置平台白名单 | 设置 `SHARDNEST_PLATFORM_ADDRESS` 或 `SHARDNEST_PLATFORM_CONFIG` |
+| `NONCE_REUSED` | nonce 已被使用（钱包侧重放兜底） | 向平台重新申请新 nonce 的请求 |
 | `WALLET_ADDRESS_MISMATCH` | 目标地址与本地钱包不一致 | 检查 wallet_address 参数 |
-| `USER_REJECTED` | 用户/宿主拒绝 approval | 提示用户确认 |
+| `USER_REJECTED` | 用户/宿主拒绝 approval（含 restore/wipe/导出） | 提示用户确认 |
 | `NO_WALLET` | 本地无钱包 | 先 wallet_create/CLI init |
 | `WALLET_EXISTS` | 钱包已存在（create 被拒） | 需 wipe（宿主 approval）或 CLI 确认 |
-| `TOKEN_EXPIRED` / `TOKEN_CONSUMED` | 令牌过期/已用 | 重新生成令牌 |
-| `NEED_SECOND_RECOVERY_CODE` | 恢复需 2 个恢复码 | 补充输入 |
+| `TOKEN_INVALID` | 口令令牌无效/过期/已用/用途不匹配 | 重新运行 `shardnest passphrase-token` 生成 |
+| `UNLOCK_INVALID` | 解锁令牌无效/过期/已用 | 重新运行 `shardnest unlock` 生成 |
+| `RESTORE_FAILED` | 恢复失败（恢复码/助记词/邮箱等） | 查看 message 字段定位 |
+| `NO_RECOVERY_FILE` / `NEED_SECOND_RECOVERY_CODE` | 恢复码文件缺失/本地仅 1 片 | 提供文件路径或第二片（邮箱/离线） |
+| `ADDRESS_MISMATCH` | 组合地址与本地不一致 | 核对恢复码/助记词来源 |
+| `EXPORT_FAILED` / `WIPE_FAILED` | 导出/删除失败 | 查看 message 字段定位 |
 
 ## 安全要求（平台侧必读）
 

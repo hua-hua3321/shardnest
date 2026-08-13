@@ -82,12 +82,14 @@ export function personalMessageHash(message: Uint8Array): Uint8Array {
  * 钱包侧签名消息（域分离 + 请求上下文绑定 + 所见即所签）。
  * 格式 v3：length-prefixed 确定性二进制（消除冒号拼接的字段边界歧义）：
  *   `shardnest:signed_request:v3:` | wallet_address(lp) | platform_address(lp)
- *   | action(lp) | intent_hash(lp 32B) | display(lp) | nonce(lp) | expires_at(8B BE) | user_id(lp)
+ *   | action(lp) | intent_hash(lp ASCII hex 0x+64) | display(lp) | nonce(lp)
+ *   | expires_at(lp 十进制字符串) | user_id(lp)
+ * - 注意：所有字段（含 intent_hash/expires_at）均为 UTF-8 字符串 + 4 字节长度前缀——
+ *   平台验签端必须调用本函数重建消息，勿按“32B 裸值/8B 大端”手拼（历史注释曾误导）
  * - 绑定 wallet_address / platform_address / action / intent_hash / display / nonce / expires_at / user_id——
  *   签名无法脱离原始请求传播：防跨请求复用（nonce）、跨钱包（wallet_address）、
  *   跨平台（platform_address）、跨用户（user_id）
  * - P1-1: display 纳入签名——所见即所签（平台显示内容与签名绑定，防偷换）
- * - 4 字节大端长度前缀 + UTF-8 字节——nonce/user_id 含冒号或任意字符均无歧义
  * - MCP 签名端与平台验签端必须调用同一函数，杜绝手工拼串漂移
  * - 注：platform_signature 不进入钱包签名——背书验签由 verifySignedRequest 独立完成（双闸门）
  */

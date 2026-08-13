@@ -9,7 +9,7 @@
  *   shardnest restore     # 输入 2 个恢复码恢复（新设备/口令丢失）
  */
 import * as readline from 'node:readline'
-import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getRecoveryFileStatus, tryReadRecoveryCodeFromFile, validatePassphrase, generatePlatformKeypair } from './commands'
+import { initWallet, getAddress, signMessage, restoreWallet, createUnlockToken, restoreFromMnemonic, exportMnemonic, exportMnemonicFromCodes, wipeWallet, WIPE_CONFIRM_PHRASE, listSavedFiles, getRecoveryFileStatus, tryReadRecoveryCodeFromFile, readRecoveryCodesFromFile, validatePassphrase, generatePlatformKeypair, savePlatformPrivateKey, splitRecoveryCodes } from './commands'
 import { createPassphraseSession } from '@wallet-services/signer'
 import { t } from './i18n'
 
@@ -38,17 +38,31 @@ async function promptSecret(question: string): Promise<string> {
     return new Promise((resolve) => {
       const r = getRl() as unknown as { _writeToOutput: (s: string) => void; question: (q: string, cb: (a: string) => void) => void }
       const orig = r._writeToOutput.bind(r)
+      orig(question) // 修复：先正常输出提示文字（此前提问被一并掩码成 `*`，用户盲输）
       r._writeToOutput = (s: string) => {
         if (s === '\r\n' || s === '\n') orig(s)
         else orig('*')
       }
-      r.question(question, (ans) => {
+      r.question('', (ans) => {
         r._writeToOutput = orig
         resolve(ans)
       })
     })
   }
   return prompt(question)
+}
+
+/** 口令输入 + 即时强度校验（弱口令立即重试，避免填完所有字段才被拒） */
+async function promptPassphrase(question: string): Promise<string> {
+  for (;;) {
+    const passphrase = await promptSecret(question)
+    try {
+      validatePassphrase(passphrase)
+      return passphrase
+    } catch (err) {
+      console.log('⚠️  ' + (err as Error).message + t('，请重新输入', ', please retry'))
+    }
+  }
 }
 
 /** 恢复码来源引导：按本地存储状态提示第二因素应来自何处（防三片同地/双因素同地） */
@@ -102,8 +116,7 @@ async function main() {
   switch (cmd) {
     case 'passphrase-token': {
       // 本地输入口令 → 生成短期单次口令令牌（MCP wallet_create/restore 用，口令不进 LLM）
-      const passphrase = await promptSecret(t('口令（>=12 位）: ', "Passphrase (>=12 chars): "))
-      validatePassphrase(passphrase)
+      const passphrase = await promptPassphrase(t('口令（>=12 位）: ', "Passphrase (>=12 chars): "))
       // P1-7: 令牌绑定操作用途——create 令牌只能用于 wallet_create，restore 令牌只能用于 wallet_restore
       console.log(t('令牌用途：', 'Token purpose:'))
       console.log(t('  [c] 创建钱包（wallet_create）', '  [c] Create wallet (wallet_create)'))
@@ -130,14 +143,35 @@ async function main() {
       console.log(t('\n🎫 平台背书密钥对（第三方平台接入 shardnest）', '\n🎫 Platform endorsement keypair (third-party shardnest integration)'))
       console.log(t('\n平台地址（公开——配置到钱包服务白名单）:', '\nPlatform address (public — configure into wallet-service whitelist):'))
       console.log(`  ${kp.address}`)
-      console.log(t('\n平台私钥（机密——仅用于签发 signed_request；请立即保存到 KMS/安全存储，勿泄露、勿进 LLM）:', '\nPlatform private key (SECRET — only for issuing signed_request; save to KMS/secure storage now, never leak, never send to an LLM):'))
-      console.log(`  ${kp.privateKeyHex}`)
+      // 私钥交付：--out <path> 时 0600 落盘仅回路径（与恢复码/助记词同原则，不进终端/剪贴板）
+      const outIdx = args.indexOf('--out')
+      const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined
+      if (outPath) {
+        const saved = await savePlatformPrivateKey(outPath, kp.privateKeyHex)
+        console.log(t('\n平台私钥（机密——仅用于签发 signed_request）已写入:', '\nPlatform private key (SECRET — only for issuing signed_request) written to:'))
+        console.log(`  ${saved} ${t('（0600）', ' (0600)')}`)
+      } else {
+        console.log(t('\n平台私钥（机密——仅用于签发 signed_request；请立即保存到 KMS/安全存储，勿泄露、勿进 LLM）:', '\nPlatform private key (SECRET — only for issuing signed_request; save to KMS/secure storage now, never leak, never send to an LLM):'))
+        console.log(`  ${kp.privateKeyHex}`)
+        console.log(t('  💡 建议加 --out <path> 以 0600 权限写入文件，避免私钥经终端/剪贴板传播', '  💡 Tip: use --out <path> to write the key to a file (0600) instead of exposing it via terminal/clipboard'))
+      }
       console.log(t('\n=== 钱包服务侧配置（粘贴到用户本地 MCP 配置） ===', '\n=== Wallet-service side config (paste into the user\'s local MCP config) ==='))
       console.log(`  环境变量（单平台）：SHARDNEST_PLATFORM_ADDRESS=${kp.address}`)
       console.log(`  环境变量（多平台，逗号分隔追加）：SHARDNEST_PLATFORM_ADDRESS=0x已有平台A,${kp.address}`)
       console.log(`  配置文件（推荐多平台）：SHARDNEST_PLATFORM_CONFIG=~/.shardnest/platforms.json`)
       console.log(`    platforms.json 条目：{ "name": "your-platform", "address": "${kp.address}" }`)
       console.log(t('\n⚠️  私钥 = 平台背书身份：泄露后攻击者可伪造平台请求诱导用户签名恶意内容；请安全保管并支持轮换。', '\n⚠️  Private key = platform endorsement identity: a leak lets attackers forge platform requests and trick users into signing malicious content; store securely and support rotation.'))
+      break
+    }
+    case 'split-recovery': {
+      // 2-of-3 分离辅助：本地恢复码文件拆成两个独立文件（用户自选一份离线保存）
+      const dir = args[0] ?? '.'
+      const { files, codes } = await splitRecoveryCodes(dir)
+      console.log(t('\n🔀 恢复码已拆分为独立文件（2-of-3 分离要求两片不同载体）:', '\n🔀 Recovery codes split into separate files (2-of-3 separation requires two distinct carriers):'))
+      for (const f of files) console.log(`  - ${f} ${t('（0600）', ' (0600)')}`)
+      console.log(t('\n📌 请立即：1) 把其中一份转移到离线位置（纸/密码管理器/另一台设备）；2) 转移后删除本机对应的那份副本；3) 原 recovery-codes.txt 可保留或删除（两片仍在同一位置即等于未分离）。', '\n📌 Next: 1) move ONE file offline (paper/password manager/another device); 2) delete the local copy of that share after moving; 3) the original recovery-codes.txt may be kept or deleted (two shares in one place = not separated).'))
+      console.log(t('\n⚠️  当前两片仍在本地（含刚生成的两个文件）——删除其中一份本地副本前，请确认离线副本已安全保存。', '\n⚠️  Both shares are still local right now (including the two new files) — before deleting one local copy, make sure the offline copy is safely stored.'))
+      if (codes.length < 2) console.log(t('\nℹ️  本地仅 1 片（另一片已发邮箱）：两片已天然分离，无需拆分。', '\nℹ️  Only 1 share local (the other is in email): already separated, no split needed.'))
       break
     }
     case 'init': {
@@ -151,7 +185,7 @@ async function main() {
           break
         }
       }
-      const passphrase = await promptSecret(t('设置口令（>=12 位，用于加密设备分片）: ', "Set passphrase (>=12 chars, encrypts device share): "))
+      const passphrase = await promptPassphrase(t('设置口令（>=12 位，用于加密设备分片）: ', "Set passphrase (>=12 chars, encrypts device share): "))
       const email = await prompt(t('邮箱（可选，自动发送备份分片——注意：邮件商可看到该明文分片（单片零信息量），回车跳过）: ', "Email (optional, auto-sends backup share — note: the mail provider can see this plaintext share (single share = zero info); Enter to skip): "))
       console.log('\n' + t('是否生成 24 词助记词备份？（默认不生成）', "Generate a 24-word mnemonic backup? (default: No)"))
       console.log(t('  ✅ 生成：单凭 24 词即可恢复钱包（最简恢复路径）。标准 BIP-39/44 语义（m/44\'/60\'/0\'/0/0）——可导入 MetaMask 等主流钱包恢复同一地址', "  ✅ Yes: recover with just the 24 words (simplest path). Standard BIP-39/44 semantics (m/44'/60'/0'/0/0) — importable into MetaMask etc. for the same address"))
@@ -254,9 +288,10 @@ async function main() {
       break
     }
     case 'restore-mnemonic': {
-      const passphrase = await promptSecret(t('设置新口令（>=12 位）: ', "Set new passphrase (>=12 chars): "))
+      const passphrase = await promptPassphrase(t('设置新口令（>=12 位）: ', "Set new passphrase (>=12 chars): "))
       console.log(t('请输入 24 词助记词（以空格分隔）:', "Enter the 24-word mnemonic (space-separated):"))
-      const mnemonic = await prompt(t('助记词: ', "Mnemonic: "))
+      // 修复：助记词 = 完整私钥，掩码输入（此前明文回显到终端）
+      const mnemonic = await promptSecret(t('助记词（掩码输入）: ', "Mnemonic (masked): "))
       const expected = await prompt(t('期望地址（旧版 sn1 恢复码在此环境必须提供，回车跳过仅限带批次标识的 sn2）: ', "Expected address (legacy sn1 codes REQUIRE this here; Enter to skip only with sn2 batch codes): "))
       const email = await prompt(t('邮箱（可选，自动更新邮箱备份分片，回车跳过）: ', "Email (optional, auto-updates email backup share; Enter to skip): "))
       const result = await restoreFromMnemonic(passphrase, mnemonic, expected || undefined, email || undefined)
@@ -271,10 +306,35 @@ async function main() {
       break
     }
     case 'restore': {
-      const passphrase = await promptSecret(t('设置新口令（>=12 位）: ', "Set new passphrase (>=12 chars): "))
-      await printRecoverySourceGuide()
-      const c1 = await promptSecret(t('恢复码 1（掩码输入）: ', "Recovery code 1 (masked): "))
-      const c2 = await promptSecret(t('恢复码 2（掩码输入）: ', "Recovery code 2 (masked): "))
+      const ropts = parseRecoveryOptions(args)
+      const passphrase = await promptPassphrase(t('设置新口令（>=12 位）: ', "Set new passphrase (>=12 chars): "))
+      // 恢复码获取：--recovery-file/自动读取优先（与 unlock/sign 一致），否则手动掩码输入
+      let c1: string
+      let c2: string
+      if (!ropts.manual) {
+        const auto = await tryReadRecoveryCodeFromFile(ropts.recoveryFile)
+        if (auto) {
+          const all = await readRecoveryCodesFromFile(ropts.recoveryFile)
+          const src = ropts.recoveryFile ?? 'recovery-codes.txt'
+          if (all.length >= 2) {
+            console.log('  📄 ' + t(`已自动读取 2 个恢复码（来源: ${src}；如需手动输入请用 --manual）`, `Auto-loaded 2 recovery codes (source: ${src}; use --manual to type them in)`))
+            c1 = all[0]
+            c2 = all[1]
+          } else {
+            console.log('  📄 ' + t(`已自动读取 1 个恢复码（来源: ${src}）——本地仅 1 片，请从邮箱/离线副本输入第二片`, `Auto-loaded 1 recovery code (source: ${src}) — only 1 share local; type the second from email/offline copy`))
+            c1 = auto
+            c2 = await promptSecret(t('恢复码 2（掩码输入）: ', "Recovery code 2 (masked): "))
+          }
+        } else {
+          await printRecoverySourceGuide()
+          c1 = await promptSecret(t('恢复码 1（掩码输入）: ', "Recovery code 1 (masked): "))
+          c2 = await promptSecret(t('恢复码 2（掩码输入）: ', "Recovery code 2 (masked): "))
+        }
+      } else {
+        await printRecoverySourceGuide()
+        c1 = await promptSecret(t('恢复码 1（掩码输入）: ', "Recovery code 1 (masked): "))
+        c2 = await promptSecret(t('恢复码 2（掩码输入）: ', "Recovery code 2 (masked): "))
+      }
       const expected = await prompt(t('期望地址（旧版 sn1 恢复码在此环境必须提供，回车跳过仅限带批次标识的 sn2）: ', "Expected address (legacy sn1 codes REQUIRE this here; Enter to skip only with sn2 batch codes): "))
       const email = await prompt(t('邮箱（可选，自动更新邮箱备份分片，回车跳过）: ', "Email (optional, auto-updates email backup share; Enter to skip): "))
       const result = await restoreWallet(passphrase, [c1, c2], expected || undefined, email || undefined)
@@ -294,7 +354,7 @@ async function main() {
       break
     }
     default:
-      console.log(t('用法: shardnest [init|init-platform|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export|wipe]\nunlock/sign 支持: --manual（强制手输恢复码） --recovery-file <path>（指定恢复码文件）', "Usage: shardnest [init|init-platform|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export|wipe]\nunlock/sign support: --manual (force manual recovery code input) --recovery-file <path> (custom codes file)"))
+      console.log(t('用法: shardnest [init|init-platform|split-recovery|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export|wipe]\nunlock/sign/restore 支持: --manual（强制手输恢复码） --recovery-file <path>（指定恢复码文件）\ninit-platform 支持: --out <path>（平台私钥 0600 落盘，不进终端）', "Usage: shardnest [init|init-platform|split-recovery|address|passphrase-token|unlock|sign|restore|restore-mnemonic|mnemonic-export|wipe]\nunlock/sign/restore support: --manual (force manual recovery code input) --recovery-file <path> (custom codes file)\ninit-platform supports: --out <path> (write platform key to file 0600, not the terminal)"))
   }
 }
 

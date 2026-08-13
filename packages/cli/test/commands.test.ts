@@ -23,6 +23,8 @@ import {getHomeDir,
   getRecoveryFileStatus,
   tryReadRecoveryCodeFromFile,
   generatePlatformKeypair,
+  savePlatformPrivateKey,
+  splitRecoveryCodes,
 } from '../src/commands'
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
@@ -644,5 +646,30 @@ describe('init-platform：平台背书密钥对生成', () => {
     const kp2 = generatePlatformKeypair()
     expect(kp2.address).not.toBe(kp1.address)
     expect(kp2.privateKeyHex).not.toBe(kp1.privateKeyHex)
+  })
+})
+
+describe('评审修复：split-recovery 拆分与平台私钥落盘', () => {
+  it('split-recovery：两片拆分为独立 0600 文件，内容与源一致', async () => {
+    const first = await initWallet(PASSPHRASE)
+    const dir = path.join(TEST_HOME, 'split-out')
+    const { files, codes } = await splitRecoveryCodes(dir)
+    expect(files).toHaveLength(2)
+    expect(codes).toEqual(first.recoveryCodes)
+    for (const f of files) {
+      const content = (await fs.readFile(f, 'utf8')).trim()
+      expect(content).toBe(codes[files.indexOf(f)])
+      const stat = await fs.stat(f)
+      expect(stat.mode & 0o777).toBe(0o600)
+    }
+  })
+
+  it('savePlatformPrivateKey：0600 落盘 + 目录自动创建', async () => {
+    const file = path.join(TEST_HOME, 'keys', 'platform.key')
+    const saved = await savePlatformPrivateKey(file, 'ab'.repeat(32))
+    expect(saved).toBe(path.resolve(file))
+    expect((await fs.readFile(file, 'utf8')).trim()).toBe('ab'.repeat(32))
+    const stat = await fs.stat(file)
+    expect(stat.mode & 0o777).toBe(0o600)
   })
 })

@@ -10,7 +10,23 @@ tags: ['changelog', 'release-notes', 'history']
 
 > 按里程碑归纳。每个提交均可 `git log --oneline` 追溯。
 
-## v0.4.x — 多平台接入（当前）
+## v0.5.x — 三视角评审修复（当前）
+
+### 2026-08-13 · 全面评审修复（加密专家/安全专家/用户三视角）
+- **掩码输入修复**：提示文字不再被掩码成 `*`（此前用户盲输）；restore-mnemonic 助记词改掩码输入（此前明文回显 = 完整私钥泄露到终端）
+- **wallet_restore 加 approval 闸门**：覆盖设备片/恢复码文件的破坏性操作必须用户确认（此前无闸门，与 wipe/导出不一致）
+- **restore 系列敏感材料清零补全**：早抛路径（地址不匹配/邮箱格式/SMTP 失败/sn1 无批次）统一 try/finally 清零；restoreFromMnemonic 派生私钥清零；encryptShare 明文 payload 清零
+- **PLATFORM_CONFIG 地址格式校验**：非法/空串条目拒绝启动（此前一条脏数据静默全拒签名服务）
+- **ReplayGuard 记录顺序**：nonce 记录推迟到解锁令牌消费后——无效令牌不再能烧掉 nonce
+- **口令即时校验**：init/restore/passphrase-token 读口令后立即校验 + 循环重试（此前填完所有字段才被拒）
+- **restore 免手输**：支持 --recovery-file/自动读取（与 unlock/sign 一致）
+- **split-recovery 命令**：恢复码拆分为两个独立 0600 文件（2-of-3 分离辅助）；TUTORIAL 修正「转移文件≠分离」
+- **init-platform --out**：平台私钥 0600 落盘不进终端（默认仍打印 + 提示）
+- **MCP 启动警告**：空白名单时启动打印配置引导（此前静默启动首次签名才报错）
+- **wallet_create 令牌异常结构化**：TOKEN_INVALID 结构化返回；INTEGRATION 错误码表改为真实存在的码（TOKEN_INVALID/UNLOCK_INVALID/NONCE_REUSED 等）
+- **walletSignMessage 注释修正**：intent_hash 为 ASCII hex lp、expires_at 为十进制字符串 lp（历史注释误导手拼）；INTEGRATION 验签示例改为可运行代码
+
+## v0.4.x — 多平台接入
 
 ### 2026-08-12 · 多平台白名单 + 接入引导
 - **多平台背书白名单**：`verifySignedRequest` 接受地址数组（单地址向后兼容），验签恢复实际签发方地址返回 `platformAddress`

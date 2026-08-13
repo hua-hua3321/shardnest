@@ -62,7 +62,12 @@ export async function loadPlatformAddresses(): Promise<string[]> {
     if (typeof item !== 'object' || item === null || typeof (item as { address?: unknown }).address !== 'string') {
       throw new Error('SHARDNEST_PLATFORM_CONFIG 条目必须含字符串 address 字段')
     }
-    fromFile.push((item as { address: string }).address.trim())
+    // 评审 F6：与 env 通道同标准——trim + 格式校验 + 滤空；非法地址拒绝启动（不静默全拒）
+    const addr = (item as { address: string }).address.trim()
+    if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
+      throw new Error(`SHARDNEST_PLATFORM_CONFIG 条目地址格式非法（须为 0x + 40 hex）: ${addr.slice(0, 24)}…`)
+    }
+    fromFile.push(addr)
   }
   return [...fromEnv, ...fromFile]
 }
@@ -124,7 +129,13 @@ export function createShardnestServer(
       }
       // 口令经本地口令令牌消费（CLI passphrase-token 生成；口令明文不进 LLM）
       // P1-7: 口令令牌绑定操作——create 令牌只能用于建钱包
-      let passphrase = await consumePassphraseSession(passphrase_token, 'create')
+      // 评审 F13：消费异常结构化返回（此前抛裸异常，MCP 返回非结构化错误）
+      let passphrase: string
+      try {
+        passphrase = await consumePassphraseSession(passphrase_token, 'create')
+      } catch (err) {
+        return errResp({ error: 'TOKEN_INVALID', message: (err as Error).message })
+      }
       let result: Awaited<ReturnType<typeof initWallet>>
       try {
         result = await initWallet(passphrase, email, generate_mnemonic === true, false) // W9: 已有钱包时拒绝（防静默覆盖）
@@ -280,12 +291,6 @@ export function createShardnestServer(
       // 验签恢复出的实际签发方地址（多平台下用于签名绑定 + 重放隔离，而非固定配置值）
       const verifiedPlatform = check.platformAddress ?? ''
 
-      // P1-3：钱包侧重放防护（在消费解锁令牌前拦截，避免浪费一次性令牌）。
-      // key 按平台地址隔离；同一 nonce 在有效期内第二次出现即视为重放。
-      if (replayGuard.isReplay(`${verifiedPlatform.toLowerCase()}:${req.nonce}`, req.expires_at * 1000)) {
-        return errResp({ error: 'NONCE_REUSED', message: '该 nonce 已被使用，疑似重放攻击' })
-      }
-
       // 纵深防御：wallet_address 必须与本地钱包一致（P1-3）
       let localAddress: string
       try {
@@ -309,6 +314,12 @@ export function createShardnestServer(
         privateKey = await consumeUnlockSession(unlock_token)
       } catch (err) {
         return errResp({ error: 'UNLOCK_INVALID', message: (err as Error).message })
+      }
+      // 评审 F7：nonce 重放记录推迟到令牌消费成功后——「有效签名 + 无效令牌」
+      // 不再能烧掉 nonce（代价：重放检测会浪费一个解锁令牌，属可接受权衡）
+      if (replayGuard.isReplay(`${verifiedPlatform.toLowerCase()}:${req.nonce}`, req.expires_at * 1000)) {
+        privateKey.fill(0)
+        return errResp({ error: 'NONCE_REUSED', message: '该 nonce 已被使用，疑似重放攻击' })
       }
       try {
         // P1-6: 签名内容 = 域分离 + 请求上下文绑定（wallet_address/platform_address/
@@ -336,6 +347,15 @@ export function createShardnestServer(
       email: z.string().email().optional(),
     },
     async ({ recovery_file_path, mnemonic_file_path, passphrase_token, expected_address, email }) => {
+      // 评审 F4：restore 会覆盖设备分片/恢复码文件（旧口令作废）——必须用户确认
+      // （与 wipe/mnemonic_export 对齐；defaultApproval 默认拒绝）
+      const approved = await approval({
+        action: 'restore_wallet',
+        display: '⚠️ 将重建钱包分片并覆盖本地设备分片与恢复码文件，旧口令/旧恢复码将作废；请确认恢复码/助记词来源可靠',
+      })
+      if (!approved) {
+        return errResp({ error: 'USER_REJECTED' })
+      }
       try {
         // P1-7: 口令令牌绑定操作——restore 令牌只能用于恢复
         const passphrase = await consumePassphraseSession(passphrase_token, 'restore')
@@ -395,6 +415,11 @@ if (process.argv[1]) {
   if (entry === self) {
     // 多平台配置双通道：env 逗号分隔 + JSON 配置文件；启动时校验，失败即拒绝启动
     const addresses = await loadPlatformAddresses()
+    // 评审 F12：空白名单启动警告（此前静默启动，首次签名才报错）
+    if (addresses.length === 0) {
+      console.error('[shardnest] ⚠️  未配置任何平台背书地址：signed_request_sign 将返回 PLATFORM_ADDRESS_NOT_CONFIGURED。')
+      console.error('[shardnest]    请设置 SHARDNEST_PLATFORM_ADDRESS（单地址或逗号分隔多地址），或 SHARDNEST_PLATFORM_CONFIG（JSON 文件）。')
+    }
     const server = createShardnestServer(defaultApproval, addresses)
     await server.connect(new StdioServerTransport())
   }
