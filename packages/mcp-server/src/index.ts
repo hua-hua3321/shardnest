@@ -12,6 +12,7 @@
  *   SHARDNEST_HOME              钱包目录（默认 ~/.shardnest）
  */
 import * as path from 'node:path'
+import { readFileSync } from 'node:fs'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
@@ -22,6 +23,13 @@ import { ReplayGuard } from './replay-guard'
 
 /** P1-3：钱包侧重放防护（模块级单例，跨 MCP server 实例共享） */
 const replayGuard = new ReplayGuard()
+
+/**
+ * serverInfo 版本单一事实来源 = package.json（杜绝与 npm 发布版本漂移）。
+ * 三场景均正确：源码运行（src/ → ../package.json）、构建产物（dist/ → ../package.json）、
+ * npm 安装（dist/ 与 package.json 同级）——相对 import.meta.url 均指向包根。
+ */
+const SERVER_VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version
 
 /** 解析逗号分隔的地址白名单（env 通道）：空值/空串 → 空数组 */
 export function parsePlatformAddresses(envValue: string | undefined): string[] {
@@ -90,7 +98,7 @@ export function createShardnestServer(
   approval: ApprovalHandler = defaultApproval,
   platformAddresses: PlatformWhitelist = parsePlatformAddresses(process.env.SHARDNEST_PLATFORM_ADDRESS),
 ) {
-  const server = new McpServer({ name: 'shardnest', version: '0.3.0' })
+  const server = new McpServer({ name: 'shardnest', version: SERVER_VERSION })
 
   // I6: 清理过期未消费的令牌会话（防堆积 + 减少侧信道）
   void cleanupExpiredUnlockSessions()

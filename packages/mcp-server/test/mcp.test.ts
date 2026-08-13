@@ -78,6 +78,13 @@ describe('shardnest MCP 薄壳', () => {
     ])
   })
 
+  it('serverInfo 版本与 package.json 一致（单一事实来源，防发布漂移）', async () => {
+    const client = await connect()
+    const pkg = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
+    expect(client.getServerVersion()?.version).toBe(pkg.version)
+    expect(client.getServerVersion()?.name).toBe('shardnest')
+  })
+
   it('W12：默认 approval 下 wallet_wipe 拒绝（防 LLM 无确认删钱包）；CLI 短语不构成 MCP 防线', async () => {
     const client = await connectWithDefaultApproval()
     const created = await createWallet(client, PASSPHRASE)
